@@ -333,9 +333,8 @@ For each assembly, create a corresponding test project:
 
 **Dependencies**:
 - The assembly being tested
-- Testing frameworks (xUnit, NUnit, MSTest)
-- Mocking libraries (Moq, NSubstitute)
-- Assertion libraries (FluentAssertions)
+- Testing framework: xUnit
+- Mocking library: Moq (`MockBehavior.Strict`)
 
 **Best Practices**:
 - Mirror the folder structure of the tested assembly

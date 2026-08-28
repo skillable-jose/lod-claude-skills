@@ -15,13 +15,17 @@ paths:
 
 ## Test Framework & Tools
 
-| Concern | React | Next.js | Angular |
+| Concern | React (Vite SPA) | Next.js | Angular |
 |---|---|---|---|
-| Unit/integration runner | **Vitest** | **Vitest** | **Jest** (default) or Vitest |
+| Unit/integration runner | **Vitest** | **Jest** (via `next/jest`) | **Jest** (default) or Vitest |
 | Component rendering | **React Testing Library** | **React Testing Library** (Server Components: call the async function directly, no render needed) | **Angular Testing Library** / `TestBed` |
-| Mocking | `vi.fn()` / `vi.spyOn()` | `vi.fn()` / `vi.spyOn()` | `jest.fn()` / `jest.spyOn()` |
+| Mocking | `vi.fn()` / `vi.spyOn()` | `jest.fn()` / `jest.spyOn()` / `jest.mock()` | `jest.fn()` / `jest.spyOn()` |
 | E2E | **Playwright** | **Playwright** | **Playwright** |
-| Assertions | Vitest `expect` + Testing Library matchers | Vitest `expect` + Testing Library matchers | Jest `expect` + Testing Library matchers |
+| Assertions | Vitest `expect` + Testing Library matchers | Jest `expect` + Testing Library matchers | Jest `expect` + Testing Library matchers |
+
+Default Next.js to **Jest** — `next/jest` gives zero-config Jest with SWC transforms and is what `create-next-app` and most existing Next.js codebases ship with. Vitest needs manual Next.js wiring and is the exception, not the default. If the target repo's `package.json` already has a `test` script, trust that over this table — e.g. a repo running `jest --maxWorkers=50%` is Jest regardless of `vitest` also sitting in `devDependencies` (a partial/abandoned migration is common; don't assume its presence means Vitest is live).
+
+Jest's `describe`/`it`/`expect`/`jest` globals are ambient — real Jest test files typically have no test-framework import at all. Vitest requires the explicit `import { describe, it, expect, vi } from 'vitest'` shown in the examples below; drop that import and swap `vi.*` for `jest.*` when the target project is on Jest.
 
 ---
 
@@ -213,10 +217,36 @@ describe('UserService', () => {
 ```
 
 **Rules:**
-- `vi.clearAllMocks()` in `beforeEach` — never share mock state between tests
+- `vi.clearAllMocks()` / `jest.clearAllMocks()` in `beforeEach` — never share mock state between tests
 - Always assert **both** the return value AND the mock call (count + arguments)
-- Use `vi.mocked()` for type-safe mock access
-- Avoid `vi.mock(modulePath)` for application services — prefer explicit constructor injection
+- Use `vi.mocked()` / `jest.mocked()` for type-safe mock access
+- Avoid `vi.mock(modulePath)` / `jest.mock(modulePath)` for application **services** (classes with constructor-injected dependencies) — prefer explicit constructor injection with a mock object, as above
+
+**Exception — plain exported functions with no constructor to inject into:** many real codebases (especially Next.js apps that predate or skip the `frontend-arch.md` layering) expose API calls as plain functions calling `fetch` directly, not as methods on a DI'd repository class. There's nothing to construct-inject there, so module-level mocking is the correct and expected tool:
+
+```typescript
+// advisor.test.ts — module under test exports plain functions, not a class
+jest.mock('../utils/api/authToken');
+
+describe('advisor', () => {
+  beforeAll(() => {
+    (getAuthToken as jest.Mock).mockResolvedValue({ accessToken: TEST_ACCESS_TOKEN });
+  });
+
+  describe('getRecommendationSummary', () => {
+    it('calls API with correct URL and options', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ numLabs: 0 }) });
+
+      const result = await getRecommendationSummary(AdvisorRecommendationStatus.NEW);
+
+      expect(result.responseData).toStrictEqual({ numLabs: 0 });
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/recommendationsummary'), expect.any(Object));
+    });
+  });
+});
+```
+
+Reach for constructor injection (no module mocking) whenever you're the one designing the module; reach for `jest.mock()`/module patching only when working inside an existing function-exports module that has no class to inject into.
 
 ### React Components — Testing Library
 
@@ -374,12 +404,12 @@ Before committing tests:
 - [ ] Every `it` string starts with `'should'` and reads as a complete sentence
 - [ ] No vague names: `it('works')`, `it('handles error')`, `it('test 1')` are forbidden
 - [ ] `vi.clearAllMocks()` / `jest.clearAllMocks()` called in `beforeEach`
-- [ ] Services: mock constructed explicitly via interface — no `vi.mock` module patching
+- [ ] Services (classes with constructor-injected dependencies): mock constructed explicitly via interface — no `vi.mock`/`jest.mock` module patching. Plain exported functions with no constructor to inject into are the documented exception — module mocking is expected there.
 - [ ] Components: queried by role/label/text — no `data-testid` unless unavoidable
 - [ ] Every test asserts both return value AND mock call (count + arguments) for service tests
 - [ ] AAA pattern with labelled comments
 - [ ] Exception tests use `.rejects.toThrow()` — not try/catch
 - [ ] `Result<T>` failures asserted on `result.success === false` and `result.error` content
-- [ ] React page/container tests wrap with `<ServicesProvider services={mockServices}>`
-- [ ] 80%+ coverage maintained
+- [ ] If the repo uses the `frontend-arch.md` layered composition root: page/container tests wrap with `<ServicesProvider services={mockServices}>`. Otherwise, use the repo's actual render helper / provider wrapper (e.g. a project-specific `renderHelper` composing its real context providers) — don't invent a `ServicesProvider` that doesn't exist in the codebase.
+- [ ] 80%+ coverage maintained (or the repo's own configured `coverageThreshold`, if different)
 - [ ] TDD workflow followed — test written before implementation

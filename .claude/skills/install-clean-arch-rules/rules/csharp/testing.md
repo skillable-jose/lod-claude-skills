@@ -12,18 +12,28 @@ Same requirement as common/testing.md. All C# projects must maintain 80%+ code c
 
 ## Test Framework & Tools
 
-- **Testing Framework**: MSTest
+- **Testing Framework**: xUnit
 - **Mocking Framework**: Moq (with `MockBehavior.Strict`)
-- **Assertion Library**: MSTest Assert + FluentAssertions
+- **Assertion Library**: xUnit `Assert`
 - **Test Organization**: One test class per service/class being tested
 
 Install packages:
 ```powershell
 dotnet add package Microsoft.NET.Test.Sdk
-dotnet add package MSTest.TestAdapter
-dotnet add package MSTest.TestFramework
+dotnet add package xunit
+dotnet add package xunit.runner.visualstudio
 dotnet add package Moq
-dotnet add package FluentAssertions
+dotnet add package coverlet.collector
+```
+
+## Test Class Naming
+
+C# is the authoritative owner of this naming syntax (see the class-naming note in [common/testing.md](../common/testing.md#test-class-naming)). Test class names MUST follow the pattern **`<ClassUnderTest>Test`** — singular, no trailing `s`:
+
+```
+UserService          -> UserServiceTest
+OrderValidator       -> OrderValidatorTest
+LabProfileDataMapper -> LabProfileDataMapperTest
 ```
 
 ## Test Class Structure
@@ -33,51 +43,50 @@ dotnet add package FluentAssertions
 Declare and initialize strict dependency mocks as **class variables inline**:
 
 ```csharp
-[TestClass]
-public class ClaimServiceTests
+public class LabProfileServiceTest
 {
-    // Dependency mocks - camelCase, no underscores, no abbreviations
-    private Mock<IClaimRepository> claimRepositoryMock = new(MockBehavior.Strict);
-    private Mock<IClaimValidator> claimValidatorMock = new(MockBehavior.Strict);
-    private Mock<ILogger<ClaimService>> loggerMock = new(MockBehavior.Strict);
-    private Mock<IDateTimeProvider> dateTimeProviderMock = new(MockBehavior.Strict);
+    // Dependency mocks - underscore-prefixed camelCase, suffixed with Mock
+    private readonly Mock<ILabProfileRepository> _labProfileRepositoryMock = new(MockBehavior.Strict);
+    private readonly Mock<ILabProfileValidator> _labProfileValidatorMock = new(MockBehavior.Strict);
+    private readonly Mock<ILogger<LabProfileService>> _loggerMock = new(MockBehavior.Strict);
+    private readonly Mock<IDateTimeProvider> _dateTimeProviderMock = new(MockBehavior.Strict);
 
-    // Service under test mock - initialized in Setup
-    private Mock<ClaimService> claimServiceMock = null!;
+    // Service under test mock - initialized in the constructor
+    private readonly Mock<LabProfileService> _labProfileServiceMock;
 
     // Time provider for testable time
-    private FakeTimeProvider timeProvider = null!;
+    private readonly FakeTimeProvider _timeProvider;
 }
 ```
 
 **Variable Naming Rules**:
-- Use **camelCase** for private variables
-- **No underscores** (e.g., use `claimRepositoryMock`, NOT `_claimRepositoryMock`)
-- **No abbreviations** (e.g., use `claimRepositoryMock`, NOT `claimRepoMock`)
+- Use **camelCase prefixed with an underscore** (e.g., `_labProfileRepositoryMock`, NOT `labProfileRepositoryMock`)
+- **No abbreviations** (e.g., use `_labProfileRepositoryMock`, NOT `_labProfileRepoMock`)
 - Suffix all mocks with `Mock`
 
-### Setup Method
+### Constructor Setup
 
-Every test class MUST have a `[TestInitialize]` setup method that creates the mock of the service under test using **factory with constructor syntax**:
+xUnit re-instantiates the test class for every test, so setup lives in the **constructor** — there is no `[TestInitialize]`/`[SetUp]` attribute. Create the mock of the service under test using **factory with constructor syntax**:
 
 ```csharp
-[TestInitialize]
-public void Setup()
+public LabProfileServiceTest()
 {
-    // Reset time provider for each test
-    timeProvider = new FakeTimeProvider();
+    // Reset time provider per test instance
+    _timeProvider = new FakeTimeProvider();
 
     // Create mock using factory syntax to allow mocking virtual methods
-    claimServiceMock = new Mock<ClaimService>(
-        () => new ClaimService(
-            claimRepositoryMock.Object,
-            claimValidatorMock.Object,
-            loggerMock.Object,
-            dateTimeProviderMock.Object
+    _labProfileServiceMock = new Mock<LabProfileService>(
+        () => new LabProfileService(
+            _labProfileRepositoryMock.Object,
+            _labProfileValidatorMock.Object,
+            _loggerMock.Object,
+            _dateTimeProviderMock.Object
         ),
         MockBehavior.Strict);
 }
 ```
+
+If the test class needs teardown, implement `IDisposable` and dispose in `Dispose()` — there is no `[TestCleanup]` attribute in xUnit.
 
 **Why mock the service under test?**
 - Tests go **one method deep** — the method under test runs its real logic, but any other method it calls on the same class is intercepted and controlled by the mock
@@ -98,18 +107,18 @@ The three-part structure maps directly to the intent rule in [common/testing.md]
 - `When/Given<Condition>` — the triggering condition
 
 ```csharp
-[TestMethod]
-public async Task GetClaimAsync_ShouldReturnClaim_WhenClaimExists()
+[Fact]
+public async Task GetLabProfileAsync_ShouldReturnLabProfile_WhenLabProfileExists()
 
-[TestMethod]
-public async Task CreateClaimAsync_ShouldThrowValidationException_WhenClaimNumberIsEmpty()
+[Fact]
+public async Task CreateLabProfileAsync_ShouldThrowValidationException_WhenNameIsEmpty()
 
-[TestMethod]
-public async Task ProcessClaimAsync_ShouldUpdateStatus_GivenValidStatusTransition()
+[Fact]
+public async Task ProcessLabProfileAsync_ShouldUpdateStatus_GivenValidStatusTransition()
 ```
 
 **Method Signature Rules**:
-- Use `async Task` for async methods being tested
+- Use `async Task` for async methods being tested — never `async void`
 - Use descriptive, specific condition descriptions — never vague words like `Works`, `Success`, `Valid`
 - The full intent (unit + outcome + condition) must be readable from the method name alone without opening the test body
 
@@ -121,51 +130,51 @@ All mocks MUST use `MockBehavior.Strict`:
 
 ```csharp
 // CORRECT
-private Mock<IClaimRepository> claimRepositoryMock = new(MockBehavior.Strict);
+private readonly Mock<ILabProfileRepository> _labProfileRepositoryMock = new(MockBehavior.Strict);
 
 // WRONG - never use Loose
-private Mock<IClaimRepository> claimRepositoryMock = new(MockBehavior.Loose);
+private readonly Mock<ILabProfileRepository> _labProfileRepositoryMock = new(MockBehavior.Loose);
 ```
 
 ### Setup with Verifiable - MANDATORY
 
-Every Setup call MUST be chained with `.Verifiable(Times.X)`:
+Every Setup call MUST be chained with `.Verifiable(Times.X)`. This replaces ad-hoc `Verify()` calls scattered through the Assert section — prefer `VerifyAll()` instead.
 
 ```csharp
-claimRepositoryMock
-    .Setup(repo => repo.GetByIdAsync(claimId, cancellationToken))
-    .ReturnsAsync(expectedClaim)
-    .Verifiable(Times.Once());
+_labProfileRepositoryMock
+    .Setup(repo => repo.GetByIdAsync(labProfileId, cancellationToken))
+    .ReturnsAsync(expectedLabProfile)
+    .Verifiable(Times.Once);
 ```
 
 **Formatting Rules**:
 - Each chained method starts on a new line
-- Setup, Returns, and Verifiable each on separate lines
+- `Setup`, `Returns`/`ReturnsAsync`, and `Verifiable` each on separate lines
 
 ### Parameter Matching
 
-Maximize argument checking. Avoid `It.IsAny()` when possible:
+Maximize argument checking. Avoid `It.IsAny()` when possible. If method parameters are propagated to dependencies, declare local variables for them so they can be verified:
 
 ```csharp
 // AVOID: Using It.IsAny when specific values can be checked
-claimRepositoryMock
+_labProfileRepositoryMock
     .Setup(repo => repo.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-    .ReturnsAsync(expectedClaim);
+    .ReturnsAsync(expectedLabProfile);
 
 // PREFER: Specific value checking
-var claimId = 123;
-claimRepositoryMock
-    .Setup(repo => repo.GetByIdAsync(claimId, cancellationToken))
-    .ReturnsAsync(expectedClaim)
-    .Verifiable(Times.Once());
+var labProfileId = 123;
+_labProfileRepositoryMock
+    .Setup(repo => repo.GetByIdAsync(labProfileId, cancellationToken))
+    .ReturnsAsync(expectedLabProfile)
+    .Verifiable(Times.Once);
 
 // BEST: Use It.Is<T> for complex matching
-claimRepositoryMock
+_labProfileRepositoryMock
     .Setup(repo => repo.CreateAsync(
-        It.Is<Claim>(c => c.ClaimNumber == "CLM-123" && c.Priority > 0),
+        It.Is<LabProfile>(p => p.Name == "Advanced-Kubernetes-303" && p.MaxSeats > 0),
         cancellationToken))
-    .ReturnsAsync(savedClaim)
-    .Verifiable(Times.Once());
+    .ReturnsAsync(savedLabProfile)
+    .Verifiable(Times.Once);
 ```
 
 ## Test Implementation Structure
@@ -173,35 +182,35 @@ claimRepositoryMock
 Every test MUST follow Arrange/Act/Assert with clearly marked sections:
 
 ```csharp
-[TestMethod]
-public async Task CreateClaimAsync_ShouldReturnClaimDto_WhenRequestIsValid()
+[Fact]
+public async Task CreateLabProfileAsync_ShouldReturnLabProfileDto_WhenRequestIsValid()
 {
     // Arrange
-    var request = new CreateClaimRequest { ClaimNumber = "CLM-001" };
-    var expectedClaim = new ClaimDto { Id = 1, ClaimNumber = "CLM-001" };
+    var request = new CreateLabProfileRequest { Name = "Intro-to-Networking-101" };
+    var expectedLabProfile = new LabProfileDto { Id = 1, Name = "Intro-to-Networking-101" };
 
-    claimValidatorMock
+    _labProfileValidatorMock
         .Setup(v => v.ValidateAsync(request, cancellationToken))
         .ReturnsAsync(ValidationResult.Success)
-        .Verifiable(Times.Once());
+        .Verifiable(Times.Once);
 
-    claimRepositoryMock
+    _labProfileRepositoryMock
         .Setup(r => r.CreateAsync(
-            It.Is<Claim>(c => c.ClaimNumber == request.ClaimNumber),
+            It.Is<LabProfile>(p => p.Name == request.Name),
             cancellationToken))
-        .ReturnsAsync(expectedClaim)
-        .Verifiable(Times.Once());
+        .ReturnsAsync(expectedLabProfile)
+        .Verifiable(Times.Once);
 
     // Act
-    var result = await claimServiceMock.Object.CreateClaimAsync(request, cancellationToken);
+    var result = await _labProfileServiceMock.Object.CreateLabProfileAsync(request, cancellationToken);
 
     // Assert
-    Assert.IsNotNull(result);
-    Assert.AreEqual(expectedClaim.ClaimNumber, result.ClaimNumber);
+    Assert.NotNull(result);
+    Assert.Equal(expectedLabProfile.Name, result.Name);
 
-    claimServiceMock.VerifyAll();
-    claimValidatorMock.VerifyAll();
-    claimRepositoryMock.VerifyAll();
+    _labProfileServiceMock.VerifyAll();
+    _labProfileValidatorMock.VerifyAll();
+    _labProfileRepositoryMock.VerifyAll();
 }
 ```
 
@@ -212,25 +221,25 @@ Virtual methods require special handling with Moq:
 ### Testing the virtual method itself - use CallBase()
 
 ```csharp
-claimServiceMock
-    .Setup(service => service.GetClaimAsync(claimId, cancellationToken))
+_labProfileServiceMock
+    .Setup(service => service.GetLabProfileAsync(labProfileId, cancellationToken))
     .CallBase()
-    .Verifiable(Times.Once());
+    .Verifiable(Times.Once);
 
-var result = await claimServiceMock.Object.GetClaimAsync(claimId, cancellationToken);
+var result = await _labProfileServiceMock.Object.GetLabProfileAsync(labProfileId, cancellationToken);
 ```
 
 ### Testing a non-virtual method that calls a virtual method - mock the virtual method
 
 ```csharp
 // Mock the virtual method that will be called internally
-claimServiceMock
-    .Setup(service => service.GetClaimAsync(claimId, cancellationToken))
-    .ReturnsAsync(claim)
-    .Verifiable(Times.Once());
+_labProfileServiceMock
+    .Setup(service => service.GetLabProfileAsync(labProfileId, cancellationToken))
+    .ReturnsAsync(labProfile)
+    .Verifiable(Times.Once);
 
 // NO CallBase() for non-virtual method under test
-await claimServiceMock.Object.ProcessClaimAsync(claimId, cancellationToken);
+await _labProfileServiceMock.Object.ProcessLabProfileAsync(labProfileId, cancellationToken);
 ```
 
 **Rules Summary**:
@@ -258,99 +267,97 @@ Every test MUST call `VerifyAll()` on:
 
 ```csharp
 // Assert
-Assert.IsNotNull(result);
-Assert.AreEqual(expectedClaimNumber, result.ClaimNumber);
+Assert.NotNull(result);
+Assert.Equal(expectedName, result.Name);
 
 // MANDATORY: Verify all mocks
-claimServiceMock.VerifyAll();
-claimValidatorMock.VerifyAll();
-claimRepositoryMock.VerifyAll();
-loggerMock.VerifyAll();
+_labProfileServiceMock.VerifyAll();
+_labProfileValidatorMock.VerifyAll();
+_labProfileRepositoryMock.VerifyAll();
+_loggerMock.VerifyAll();
 ```
 
 ### Exception Testing
 
-Use `Assert.ThrowsExceptionAsync<T>`. Do NOT use `[ExpectedException]` attribute:
+Use `Assert.ThrowsAsync<T>` (or `Assert.Throws<T>` for synchronous methods). Do NOT use `[ExpectedException]`-style attributes — xUnit doesn't have one, but the same reasoning applies to any declarative exception attribute encountered in ported code:
 
 ```csharp
-[TestMethod]
-public async Task CreateClaimAsync_ShouldThrowValidationException_WhenClaimNumberIsEmpty()
+[Fact]
+public async Task CreateLabProfileAsync_ShouldThrowValidationException_WhenNameIsEmpty()
 {
     // Arrange
-    var invalidRequest = new CreateClaimRequest { ClaimNumber = "" };
+    var invalidRequest = new CreateLabProfileRequest { Name = "" };
 
-    claimValidatorMock
+    _labProfileValidatorMock
         .Setup(v => v.ValidateAsync(invalidRequest, cancellationToken))
-        .ThrowsAsync(new ValidationException("Claim number is required"))
-        .Verifiable(Times.Once());
+        .ThrowsAsync(new ValidationException("Lab profile name is required"))
+        .Verifiable(Times.Once);
 
     // Act & Assert
-    var exception = await Assert.ThrowsExceptionAsync<ValidationException>(
-        () => claimServiceMock.Object.CreateClaimAsync(invalidRequest, cancellationToken));
+    var exception = await Assert.ThrowsAsync<ValidationException>(
+        () => _labProfileServiceMock.Object.CreateLabProfileAsync(invalidRequest, cancellationToken));
 
-    Assert.AreEqual("Claim number is required", exception.Message);
+    Assert.Equal("Lab profile name is required", exception.Message);
 
-    claimServiceMock.VerifyAll();
-    claimValidatorMock.VerifyAll();
+    _labProfileServiceMock.VerifyAll();
+    _labProfileValidatorMock.VerifyAll();
 }
 ```
 
 ## Time Provider
 
-Use `FakeTimeProvider` for testable time:
+Use `FakeTimeProvider` (from `Microsoft.Extensions.TimeProvider.Testing`) for testable time:
 
 ```csharp
-[TestClass]
-public class ClaimServiceTests
+public class LabProfileServiceTest
 {
-    private FakeTimeProvider timeProvider = null!;
-    private Mock<ClaimService> claimServiceMock = null!;
+    private readonly FakeTimeProvider _timeProvider;
+    private readonly Mock<LabProfileService> _labProfileServiceMock;
 
-    [TestInitialize]
-    public void Setup()
+    public LabProfileServiceTest()
     {
-        timeProvider = new FakeTimeProvider();
-        timeProvider.SetUtcNow(new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc));
+        _timeProvider = new FakeTimeProvider();
+        _timeProvider.SetUtcNow(new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc));
 
-        claimServiceMock = new Mock<ClaimService>(
-            () => new ClaimService(timeProvider),
+        _labProfileServiceMock = new Mock<LabProfileService>(
+            () => new LabProfileService(_timeProvider),
             MockBehavior.Strict);
     }
 
-    [TestMethod]
-    public async Task CreateClaim_ShouldSetCreatedDate_WhenClaimIsValid()
+    [Fact]
+    public async Task CreateLabProfile_ShouldSetCreatedDate_WhenLabProfileIsValid()
     {
         // Arrange
-        var expectedDate = timeProvider.GetUtcNow();
+        var expectedDate = _timeProvider.GetUtcNow();
 
         // Act
-        var result = await claimServiceMock.Object.CreateClaimAsync(request, cancellationToken);
+        var result = await _labProfileServiceMock.Object.CreateLabProfileAsync(request, cancellationToken);
 
         // Assert
-        Assert.AreEqual(expectedDate, result.CreatedDate);
+        Assert.Equal(expectedDate, result.CreatedDate);
     }
 }
 ```
 
-## Parameterized Tests with DataRow
+## Parameterized Tests with InlineData
 
-Use `[DataRow]` for testing multiple scenarios:
+Use `[Theory]` + `[InlineData]` for testing multiple scenarios:
 
 ```csharp
-[TestMethod]
-[DataRow(0, false)]
-[DataRow(-1, false)]
-[DataRow(1, true)]
-[DataRow(100, true)]
+[Theory]
+[InlineData(0, false)]
+[InlineData(-1, false)]
+[InlineData(1, true)]
+[InlineData(100, true)]
 public void IsValidUserId_ShouldReturnExpectedResult_GivenVariousInputs(
     int userId,
     bool expected)
 {
     // Act
-    var result = userServiceMock.Object.IsValidUserId(userId);
+    var result = _userServiceMock.Object.IsValidUserId(userId);
 
     // Assert
-    Assert.AreEqual(expected, result);
+    Assert.Equal(expected, result);
 }
 ```
 
@@ -359,167 +366,92 @@ public void IsValidUserId_ShouldReturnExpectedResult_GivenVariousInputs(
 ### DbContext Mock Testing
 
 ```csharp
-[TestClass]
-public class ClaimDataMapperTests
+public class LabProfileDataMapperTest
 {
-    private Mock<CareMCContext> contextMock = new(MockBehavior.Strict);
-    private Mock<DbSet<Claim>> claimDbSetMock = new(MockBehavior.Strict);
-    private Mock<ClaimDataMapper> dataMapperMock = null!;
+    private readonly Mock<LabOnDemandContext> _contextMock = new(MockBehavior.Strict);
+    private readonly Mock<DbSet<LabProfile>> _labProfileDbSetMock = new(MockBehavior.Strict);
+    private readonly Mock<LabProfileDataMapper> _dataMapperMock;
 
-    [TestInitialize]
-    public void Setup()
+    public LabProfileDataMapperTest()
     {
-        dataMapperMock = new Mock<ClaimDataMapper>(
-            () => new ClaimDataMapper(contextMock.Object),
+        _dataMapperMock = new Mock<LabProfileDataMapper>(
+            () => new LabProfileDataMapper(_contextMock.Object),
             MockBehavior.Strict);
     }
 
-    [TestMethod]
-    public async Task GetClaimByIdAsync_ShouldReturnClaim_WhenClaimExists()
+    [Fact]
+    public async Task GetLabProfileByIdAsync_ShouldReturnLabProfile_WhenLabProfileExists()
     {
         // Arrange
-        var claimId = 123;
-        var expectedClaim = new Claim { Id = claimId };
+        var labProfileId = 123;
+        var expectedLabProfile = new LabProfile { Id = labProfileId };
 
-        contextMock
-            .Setup(ctx => ctx.Claims)
-            .Returns(claimDbSetMock.Object)
-            .Verifiable(Times.Once());
+        _contextMock
+            .Setup(ctx => ctx.LabProfiles)
+            .Returns(_labProfileDbSetMock.Object)
+            .Verifiable(Times.Once);
 
-        claimDbSetMock
-            .Setup(set => set.FindAsync(claimId))
-            .ReturnsAsync(expectedClaim)
-            .Verifiable(Times.Once());
+        _labProfileDbSetMock
+            .Setup(set => set.FindAsync(labProfileId))
+            .ReturnsAsync(expectedLabProfile)
+            .Verifiable(Times.Once);
 
         // Act
-        var result = await dataMapperMock.Object.GetClaimByIdAsync(claimId, cancellationToken);
+        var result = await _dataMapperMock.Object.GetLabProfileByIdAsync(labProfileId, cancellationToken);
 
         // Assert
-        Assert.IsNotNull(result);
-        Assert.AreEqual(claimId, result.Id);
-        dataMapperMock.VerifyAll();
-        contextMock.VerifyAll();
-        claimDbSetMock.VerifyAll();
+        Assert.NotNull(result);
+        Assert.Equal(labProfileId, result.Id);
+        _dataMapperMock.VerifyAll();
+        _contextMock.VerifyAll();
+        _labProfileDbSetMock.VerifyAll();
     }
-}
-```
-
-### Stored Procedure Testing
-
-```csharp
-[TestMethod]
-public async Task GetClaimSummaryAsync_ShouldReturnSummary_WhenClaimExists()
-{
-    // Arrange
-    var claimId = 123;
-    var expectedResults = new List<ClaimSummaryDto>
-    {
-        new ClaimSummaryDto { ClaimId = claimId, Status = "Open" }
-    };
-
-    contextMock
-        .Setup(ctx => ctx.Database.SqlQuery<ClaimSummaryDto>(
-            $"EXEC GetClaimSummary {claimId}"))
-        .Returns(expectedResults.AsAsyncEnumerable())
-        .Verifiable(Times.Once());
-
-    // Act
-    var result = await dataMapperMock.Object.GetClaimSummaryAsync(claimId, cancellationToken);
-
-    // Assert
-    Assert.IsNotNull(result);
-    Assert.AreEqual(claimId, result.ClaimId);
-    dataMapperMock.VerifyAll();
-    contextMock.VerifyAll();
 }
 ```
 
 ## Integration Tests with WebApplicationFactory
 
-Test entire HTTP pipeline including routing, model binding, validation, and filters:
+Test entire HTTP pipeline including routing, model binding, validation, and filters. In xUnit, share the factory across tests with `IClassFixture<T>` rather than per-test `[TestInitialize]`/`[TestCleanup]`:
 
 ```csharp
-[TestClass]
-public class UsersControllerIntegrationTests
+public class UsersControllerIntegrationTest : IClassFixture<WebApplicationFactory<Program>>
 {
-    private WebApplicationFactory<Program> factory = null!;
-    private HttpClient client = null!;
+    private readonly HttpClient _client;
 
-    [TestInitialize]
-    public void Setup()
+    public UsersControllerIntegrationTest(WebApplicationFactory<Program> factory)
     {
-        factory = new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
+        var configuredFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
             {
-                builder.ConfigureServices(services =>
+                var descriptor = services.SingleOrDefault(
+                    d => d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>));
+
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddDbContext<ApplicationDbContext>(options =>
                 {
-                    var descriptor = services.SingleOrDefault(
-                        d => d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>));
-
-                    if (descriptor != null)
-                        services.Remove(descriptor);
-
-                    services.AddDbContext<ApplicationDbContext>(options =>
-                    {
-                        options.UseInMemoryDatabase("TestDb");
-                    });
+                    options.UseInMemoryDatabase("TestDb");
                 });
             });
+        });
 
-        client = factory.CreateClient();
+        _client = configuredFactory.CreateClient();
     }
 
-    [TestCleanup]
-    public void Cleanup()
-    {
-        client.Dispose();
-        factory.Dispose();
-    }
-
-    [TestMethod]
+    [Fact]
     public async Task GetUsers_ShouldReturnSuccess_WhenUsersExist()
     {
         // Act
-        var response = await client.GetAsync("/api/users");
+        var response = await _client.GetAsync("/api/users");
 
         // Assert
         response.EnsureSuccessStatusCode();
-        Assert.AreEqual(
+        Assert.Equal(
             "application/json; charset=utf-8",
             response.Content.Headers.ContentType?.ToString());
     }
-}
-```
-
-## FluentAssertions
-
-More expressive assertions (used alongside MSTest Assert):
-
-```csharp
-using FluentAssertions;
-
-[TestMethod]
-public async Task GetUserByIdAsync_ShouldReturnUserWithCorrectProperties_WhenUserExists()
-{
-    // Arrange
-    var userId = 1;
-    var user = new User { Id = userId, Name = "John Doe", Email = "john@example.com" };
-    userRepositoryMock
-        .Setup(r => r.GetByIdAsync(userId, cancellationToken))
-        .ReturnsAsync(user)
-        .Verifiable(Times.Once());
-
-    // Act
-    var result = await userServiceMock.Object.GetUserByIdAsync(userId, cancellationToken);
-
-    // Assert
-    result.Should().NotBeNull();
-    result!.Id.Should().Be(userId);
-    result.Name.Should().Be("John Doe");
-    result.Email.Should().Be("john@example.com");
-
-    userServiceMock.VerifyAll();
-    userRepositoryMock.VerifyAll();
 }
 ```
 
@@ -538,13 +470,13 @@ Solution/
 │       └── UserRepository.cs
 └── MyApp.Tests/
     ├── Controllers/
-    │   └── UsersControllerTests.cs
+    │   └── UsersControllerTest.cs
     ├── Services/
-    │   └── UserServiceTests.cs
+    │   └── UserServiceTest.cs
     ├── Repositories/
-    │   └── UserRepositoryTests.cs
+    │   └── UserRepositoryTest.cs
     └── Integration/
-        └── UsersControllerIntegrationTests.cs
+        └── UsersControllerIntegrationTest.cs
 ```
 
 ## Running Tests and Coverage
@@ -554,22 +486,17 @@ Solution/
 dotnet test
 
 # Run tests with coverage
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
-
-# With coverage threshold
-dotnet test /p:CollectCoverage=true /p:Threshold=80
+dotnet test --collect:"XPlat Code Coverage"
 
 # Generate HTML coverage report (requires ReportGenerator)
 dotnet tool install -g dotnet-reportgenerator-globaltool
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura
-reportgenerator -reports:"coverage.cobertura.xml" -targetdir:"coveragereport" -reporttypes:Html
+reportgenerator -reports:"**/coverage.cobertura.xml" -targetdir:"coveragereport" -reporttypes:Html
 ```
 
 Add to `.csproj`:
 ```xml
 <ItemGroup>
   <PackageReference Include="coverlet.collector" Version="6.0.0" />
-  <PackageReference Include="coverlet.msbuild" Version="6.0.0" />
 </ItemGroup>
 ```
 
@@ -577,10 +504,10 @@ Add to `.csproj`:
 
 Before submitting unit tests:
 
-- [ ] Test class named `<ClassUnderTest>Tests`
+- [ ] Test class named `<ClassUnderTest>Test` (singular)
 - [ ] All mocks declared inline with `MockBehavior.Strict`
-- [ ] Mock variables use camelCase, no underscores, no abbreviations, suffixed with `Mock`
-- [ ] `[TestInitialize]` Setup method creates service mock with factory constructor syntax
+- [ ] Mock variables use underscore-prefixed camelCase, no abbreviations, suffixed with `Mock`
+- [ ] Constructor creates the service mock with factory constructor syntax (no `[TestInitialize]` — that's MSTest/NUnit, not xUnit)
 - [ ] `FakeTimeProvider` used for testable time
 - [ ] Test methods follow `MethodName_ShouldResult_WhenCondition` naming convention
 - [ ] All public/internal methods on SUT are `virtual` (no non-virtual, no static on service classes)
@@ -588,7 +515,7 @@ Before submitting unit tests:
 - [ ] Virtual methods tested with `.CallBase()` when under test
 - [ ] All Setup calls chained with `.Verifiable(Times.X)`
 - [ ] Every test calls `.VerifyAll()` on all mocks
-- [ ] Exception tests use `Assert.ThrowsExceptionAsync<T>` (NOT `[ExpectedException]`)
+- [ ] Exception tests use `Assert.ThrowsAsync<T>` / `Assert.Throws<T>`
 - [ ] Parameter matching maximized (avoid `It.IsAny` when specific values can be checked)
 - [ ] AAA pattern used (Arrange-Act-Assert with comments)
 - [ ] `async Task` used for async test methods

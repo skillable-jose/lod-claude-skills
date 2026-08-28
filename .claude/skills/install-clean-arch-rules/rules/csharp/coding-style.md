@@ -278,17 +278,17 @@ All public and internal methods on service and repository classes **MUST be `vir
 
 ```csharp
 // CORRECT - all methods are virtual
-public class ClaimService : IClaimService
+public class LabProfileService : ILabProfileService
 {
-    public virtual async Task<ClaimDto> GetClaimAsync(int id, CancellationToken ct) { ... }
-    public virtual async Task<ClaimDto> CreateClaimAsync(CreateClaimRequest req, CancellationToken ct) { ... }
+    public virtual async Task<LabProfileDto> GetLabProfileAsync(int id, CancellationToken ct) { ... }
+    public virtual async Task<LabProfileDto> CreateLabProfileAsync(CreateLabProfileRequest req, CancellationToken ct) { ... }
     internal virtual bool ValidateTransition(string from, string to) { ... }
 }
 
 // WRONG - non-virtual methods cannot be intercepted by mock frameworks
-public class ClaimService : IClaimService
+public class LabProfileService : ILabProfileService
 {
-    public async Task<ClaimDto> GetClaimAsync(int id, CancellationToken ct) { ... }
+    public async Task<LabProfileDto> GetLabProfileAsync(int id, CancellationToken ct) { ... }
     public static bool IsValidStatus(string status) { ... }
 }
 ```
@@ -365,21 +365,21 @@ ALWAYS use `ILogger<T>` for logging. NEVER use `Console.WriteLine`:
 ```csharp
 // CORRECT: ILogger<T> with structured logging — only log what telemetry can't capture
 // (see common/logging.md for when to log)
-public class PaymentService(
-    IPaymentGateway gateway,
-    ILogger<PaymentService> logger)
+public class LabInstanceService(
+    IVirtualizationGateway gateway,
+    ILogger<LabInstanceService> logger)
 {
-    public virtual async Task<PaymentResult> ProcessRefundAsync(
-        int orderId, decimal amount, CancellationToken cancellationToken)
+    public virtual async Task<DeprovisionResult> DeprovisionLabInstanceAsync(
+        int labInstanceId, CancellationToken cancellationToken)
     {
-        var result = await gateway.RefundAsync(orderId, amount, cancellationToken);
+        var result = await gateway.DeprovisionAsync(labInstanceId, cancellationToken);
 
-        if (result.GatewayStatus == "success" && !result.OrderUpdated)
+        if (result.GatewayStatus == "success" && !result.InstanceUpdated)
         {
             // Business-critical anomaly not visible in telemetry
             logger.LogError(
-                "Payment gateway returned success but order was not updated (OrderId: {OrderId}, Amount: {Amount}).",
-                orderId, amount);
+                "Virtualization gateway returned success but lab instance was not updated (LabInstanceId: {LabInstanceId}).",
+                labInstanceId);
         }
 
         return result;

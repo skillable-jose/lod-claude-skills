@@ -99,7 +99,7 @@ export const useServices = () => useContext(ServicesContext)
 
 The `server-only` import in `services.server.ts` makes Next.js throw a build error if that module is ever accidentally imported from a Client Component — use it on every server-side composition root.
 
-**Testing**: Same as [react.md](react.md) — wrap the Client Component under test with `<ServicesProvider services={mockServices}>`. For Server Components, call the service function directly in the test (no rendering needed to test data-loading logic) or use React Testing Library's async server-component render support.
+**Testing**: Same pattern as [react.md](react.md) — wrap the Client Component under test with `<ServicesProvider services={mockServices}>`. For Server Components, call the service function directly in the test (no rendering needed to test data-loading logic) or use React Testing Library's async server-component render support. Note the runner differs from react.md's Vite-SPA default: most Next.js apps run **Jest** (via `next/jest`), not Vitest — see [typescript/testing.md](testing.md#test-framework--tools). Swap `vi.fn()`/`vi.mock()` for `jest.fn()`/`jest.mock()` accordingly.
 
 ---
 
