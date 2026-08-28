@@ -19,12 +19,10 @@ MANDATORY workflow:
 
 ## Test Class Naming
 
-Test class names MUST follow the pattern: `<ClassUnderTest>Tests`
+Test class names MUST follow the pattern `<ClassUnderTest>` + a test suffix. The exact suffix is language-specific — see the language file for the authoritative syntax:
 
-Examples:
-- `UserService` -> `UserServiceTests`
-- `OrderValidator` -> `OrderValidatorTests`
-- `ClaimDataMapper` -> `ClaimDataMapperTests`
+- **C#** uses the singular suffix `Test` (e.g., `UserService` -> `UserServiceTest`) — see [csharp/testing.md](../csharp/testing.md#test-class-naming)
+- **TypeScript/JavaScript** has no file-level suffix requirement; the outer `describe` block names the class or component — see [typescript/testing.md](../typescript/testing.md)
 
 ## Test Naming — Intent Rule (Language-Agnostic)
 
