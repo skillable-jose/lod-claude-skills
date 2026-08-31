@@ -41,6 +41,8 @@ Repository interfaces operate on **domain models**, NOT on EF Core entity classe
 
 **Single vs SingleOrDefault**: `Single` methods throw `NotFoundException` when the entity is not found. `SingleOrDefault` methods return `null`. Use `Single` when absence is exceptional; use `SingleOrDefault` when absence is a valid outcome.
 
+**This is a repository-internal calling convention, not a violation of the ADR-IDP001 reservation rule.** `NotFoundException` thrown here is caught and translated by the calling **domain service** method into `Result.Failure<T>(new ResultError(ResultErrorKind.NotFound, ...))` before it can reach a controller — "not found" is an expected outcome at the service boundary even though the repository expresses it as an exception internally. A `NotFoundException` must never propagate past the service layer unhandled.
+
 ```csharp
 public interface IUserRepository
 {
@@ -85,42 +87,60 @@ public record UpdateUserRequest(string Name, string Email);
 
 ## Result Pattern
 
-For operations where failure is expected, use a `Result<T>` type instead of exceptions:
+> This shape is normative per **ADR-IDP001** (Error Handling and Result Pattern for Use Case Returns) — it is not a locally-invented convention. Do not alter field names or factory signatures without a corresponding ADR change.
+
+Domain service methods that can fail in **expected** ways (validation, not-found, conflict, forbidden — see the reservation rule below) return `Result<T>` (or the non-generic `Result` for void use cases) instead of throwing:
 
 ```csharp
-public record Result<T>
+public class Result<T>
 {
-    public bool IsSuccess { get; init; }
-    public T? Value { get; init; }
-    public string? Error { get; init; }
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
+    public T? Value { get; }
+    public ResultError? Error { get; }
+}
 
-    public static Result<T> Success(T value) =>
-        new() { IsSuccess = true, Value = value };
+public class Result
+{
+    // Same shape as Result<T>, without Value — for void use cases
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
+    public ResultError? Error { get; }
+}
 
-    public static Result<T> Failure(string error) =>
-        new() { IsSuccess = false, Error = error };
+public record ResultError(ResultErrorKind Kind, string Code, string Message, object? Details = null);
+
+public enum ResultErrorKind
+{
+    NotFound,
+    Validation,
+    Conflict,
+    Forbidden,
+    Unauthorized,
+    BadRequest,
+    Internal,
 }
 ```
 
-## API Response Envelope
-
-Use a consistent envelope for all API responses. `StatusCode` is ALWAYS required.
+Construct results via the static factories, never a public constructor:
 
 ```csharp
-public record ApiResponse<T>
-{
-    public bool Success { get; init; }
-    public T? Data { get; init; }
-    public string? Error { get; init; }
-    public HttpStatusCode StatusCode { get; init; }
-
-    public static ApiResponse<T> Ok(T data) =>
-        new() { Success = true, Data = data, StatusCode = HttpStatusCode.OK };
-
-    public static ApiResponse<T> Fail(string error, HttpStatusCode statusCode) =>
-        new() { Success = false, Error = error, StatusCode = statusCode };
-}
+Result.Success(value)                 // Result<T>, success
+Result.Failure<T>(resultError)         // Result<T>, failure
 ```
+
+### The reservation rule (ADR-IDP001)
+
+If a domain expert would describe an outcome as **"the system did its job and the answer was no"** — return `Result.Failure(...)`:
+
+- Name already exists → `Result.Failure<T>(new ResultError(ResultErrorKind.Conflict, "user.duplicate_email", "Email already exists"))`
+- Entity not found → `ResultErrorKind.NotFound`
+- Validation error → `ResultErrorKind.Validation`
+- Insufficient permission → `ResultErrorKind.Forbidden`
+
+If a domain expert would describe an outcome as **"something went wrong"** — it is not a `Result.Failure`. Integration failures (DB unavailable, downstream timeout) are caught and translated/re-raised at the layer that owns the integration (see `csharp/persistence.md`); programmer errors are exceptions that propagate to the last-resort handler. **Never mix the two mechanisms for the same kind of outcome** — a method that returns `Result<T>` for "not found" must not also throw for "not found" on a different code path.
+
+Controllers translate `Result<T>` to HTTP via `result.ToActionResult(this)` — see `csharp/presentation.md`. Failure codes (e.g. `user.duplicate_email`) are stable API contract elements; clients match on `Code`, never on `Message`.
 
 ## Specification Interface
 
@@ -137,16 +157,21 @@ public interface ISpecification<T>
 
 ## Custom Exceptions
 
-Define domain-specific exceptions in Abstractions:
+Reserve exceptions for the two cases ADR-IDP001 assigns to them — **never** for an expected outcome a `Result<T>` should carry instead:
 
 ```csharp
+// CORRECT — repository-internal signal, translated to Result.Failure by the calling service
 public class NotFoundException : Exception
 {
     public NotFoundException(string message) : base(message) { }
 }
 
-public class DuplicateEmailException : Exception
+// CORRECT — genuine integration failure (DB unreachable, downstream timeout),
+// caught and re-raised at the layer that owns the integration (see csharp/persistence.md)
+public class IntegrationException : Exception
 {
-    public DuplicateEmailException(string message) : base(message) { }
+    public IntegrationException(string message, Exception? inner = null) : base(message, inner) { }
 }
 ```
+
+**Do not** define an exception for a business outcome that has a `ResultErrorKind` — e.g. no `DuplicateEmailException`. "Email already exists" is `Result.Failure<T>(new ResultError(ResultErrorKind.Conflict, "user.duplicate_email", "Email already exists"))` per the reservation rule, not a thrown exception.

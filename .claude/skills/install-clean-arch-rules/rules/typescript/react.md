@@ -5,357 +5,293 @@ paths:
   - "src/**/*.tsx"
   - "src/**/*.ts"
 ---
-# TypeScript - React Clean Architecture
+# TypeScript - React (Vite SPA)
 
-> React-specific implementation of the clean architecture layers defined in [frontend-arch.md](frontend-arch.md). Read that file first for layer definitions, domain types, repository and service rules. See [css.md](css.md) for CSS architecture: design tokens, CSS Modules scoping rules, ITCSS structure, and theming.
-
----
-
-## Repository Implementation in React
-
-Repositories are plain classes — no React imports. Inject the base URL (or an `axios` instance) via the constructor.
-
-```typescript
-// repositories/users/http-user-repository.ts
-export class HttpUserRepository implements IUserRepository {
-  constructor(private readonly http: ApiClient) {}
-
-  async userSingleById(id: string): Promise<User> {
-    const user = await this.userSingleOrDefaultById(id)
-    if (!user) throw new NotFoundException(`User not found (UserId: ${id})`)
-    return user
-  }
-
-  async userSingleOrDefaultById(id: string): Promise<User | null> {
-    const res = await this.http.get<UserDto>(`/users/${id}`)
-    return res ? this.mapToDomain(res) : null
-  }
-
-  private mapToDomain(dto: UserDto): User { ... }
-}
-```
-
-A lightweight `ApiClient` wrapping `fetch` (or `axios`) belongs in `core/api-client.ts`. It handles auth headers, base URL, and throws `AppError` on non-2xx responses — keeping individual repositories clean.
+> React-specific implementation of the feature-folder architecture defined in [frontend-arch.md](frontend-arch.md) — read that file first for the folder structure, the five architectural rules, and the `ApiResponse<T>` shape. See [css.md](css.md) for CSS architecture and [testing.md](testing.md) for the Vitest/Testing Library/MSW conventions.
 
 ---
 
-## Service Implementation in React
+## Feature `api/` Modules — Plain Functions, No Class
 
-Services are plain classes. No React hooks, no `useState`, no `useEffect`.
+A feature's API calls are plain exported functions, not a repository class. They call the one shared HTTP client — never `fetch` directly.
 
 ```typescript
-// services/users/user-service.ts
-export class UserService implements IUserService {
-  constructor(private readonly userRepo: IUserRepository) {}
+// features/users/api/users.api.ts
+import { client } from '../../../shared/api/client'
+import type { ApiResponse, PaginatedApiResponse } from '../../../shared/api/api-response.types'
+import type { User, CreateUserRequest } from '../types/user'
 
-  // ... same as frontend-arch.md examples
+export function getActiveUsers(): Promise<PaginatedApiResponse<User>> {
+  return client.get('/users', { params: { isActive: true } })
+}
+
+export function getUserById(id: string): Promise<ApiResponse<User>> {
+  return client.get(`/users/${id}`)
+}
+
+export function createUser(data: CreateUserRequest): Promise<ApiResponse<User>> {
+  return client.post('/users', data)
+}
+
+export function deleteUser(id: string): Promise<ApiResponse<void>> {
+  return client.delete(`/users/${id}`)
 }
 ```
+
+`shared/api/client.ts` is the only place that attaches auth headers, translates transport errors into `ApiResponse` failures, and fires logging hooks. Individual feature `api/` modules stay thin — one function per operation, no business logic.
 
 ---
 
-## Composition Root
+## Hooks — Where Server Data Lives
 
-Wire all dependencies in `core/providers.tsx`. This is the React equivalent of `Program.cs`.
-
-```typescript
-// core/providers.tsx
-import { createContext, useContext, type ReactNode } from 'react'
-import { HttpUserRepository } from '../repositories/http-user-repository'
-import { UserService } from '../services/user-service'
-import { ApiClient } from './api-client'
-
-interface Services {
-  userService: IUserService
-}
-
-const apiClient = new ApiClient(import.meta.env.VITE_API_BASE_URL)
-const userRepository = new HttpUserRepository(apiClient)
-const defaultServices: Services = {
-  userService: new UserService(userRepository),
-}
-
-const ServicesContext = createContext<Services>(defaultServices)
-
-export function ServicesProvider({ children, services = defaultServices }: {
-  children: ReactNode
-  services?: Services
-}) {
-  return <ServicesContext.Provider value={services}>{children}</ServicesContext.Provider>
-}
-
-export const useServices = () => useContext(ServicesContext)
-```
+Per `frontend-arch.md` Rule 3: fetch in a hook, hold the result in `useState` by default. No composition root, no `useServices()` — the hook imports the feature's `api/` module directly.
 
 ```typescript
-// main.tsx
-root.render(
-  <ServicesProvider>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </ServicesProvider>
-)
-```
-
-**Testing**: Wrap the component under test with `<ServicesProvider services={mockServices}>` — no `vi.mock` or global `fetch` patching needed.
-
-```typescript
-// test example
-const mockServices = {
-  userService: {
-    getActiveUsers: vi.fn().mockResolvedValue([fakeUser]),
-    deleteUser: vi.fn().mockResolvedValue(undefined),
-  } satisfies IUserService
-}
-
-render(
-  <ServicesProvider services={mockServices}>
-    <UsersPage />
-  </ServicesProvider>
-)
-```
-
----
-
-## State Layer: React Query + Zustand
-
-React Query manages **server state** (fetching, caching, background refresh, optimistic updates). Zustand manages **client/UI state** (selected items, open panels, theme).
-
-### Query Hooks (server state)
-
-One hook per query use case. The hook is the "controller" — it calls the service, handles loading/error states, and returns typed data. No business logic lives here.
-
-```typescript
-// state/users/use-user-list.ts
-import { useQuery } from '@tanstack/react-query'
-import { useServices } from '../../core/providers'
+// features/users/hooks/use-user-list.ts
+import { useEffect, useState } from 'react'
+import { getActiveUsers } from '../api/users.api'
+import type { User } from '../types/user'
 
 export function useUserList() {
-  const { userService } = useServices()
+  const [users, setUsers] = useState<User[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    let cancelled = false
+    setIsLoading(true)
+
+    getActiveUsers().then((response) => {
+      if (cancelled) return
+      if (response.success) {
+        setUsers(response.data)
+        setError(null)
+      } else {
+        setError(response.error.message)
+      }
+      setIsLoading(false)
+    })
+
+    return () => { cancelled = true }
+  }, [])
+
+  return { users, isLoading, error }
+}
+```
+
+**Only reach for TanStack Query** when this hand-rolled pattern is genuinely insufficient — cache invalidation across multiple components, background refetch, optimistic updates — and record the decision in the project's `ADR-0000`:
+
+```typescript
+// features/users/hooks/use-user-list.ts — TanStack Query variant, once justified
+import { useQuery } from '@tanstack/react-query'
+import { getActiveUsers } from '../api/users.api'
+
+export function useUserList() {
   return useQuery({
     queryKey: ['users', 'active'],
-    queryFn: () => userService.getActiveUsers(),
-  })
-}
-```
-
-```typescript
-// state/users/use-user-by-id.ts
-export function useUserById(id: string) {
-  const { userService } = useServices()
-
-  return useQuery({
-    queryKey: ['users', id],
-    queryFn: () => userService.getUserById(id),
-    enabled: !!id,
-  })
-}
-```
-
-### Mutation Hooks (commands)
-
-```typescript
-// state/users/use-create-user.ts
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-
-export function useCreateUser() {
-  const { userService } = useServices()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (data: CreateUserRequest) => userService.createUser(data),
-    onSuccess: (result) => {
-      if (result.success) {
-        queryClient.invalidateQueries({ queryKey: ['users'] })
-      }
+    queryFn: async () => {
+      const response = await getActiveUsers()
+      if (!response.success) throw new Error(response.error.message)
+      return response.data
     },
   })
 }
 ```
 
 ```typescript
-// state/users/use-delete-user.ts
-export function useDeleteUser() {
-  const { userService } = useServices()
+// features/users/hooks/use-create-user.ts
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { createUser } from '../api/users.api'
+
+export function useCreateUser() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (id: string) => userService.deleteUser(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+    mutationFn: createUser,
+    onSuccess: (response) => {
+      if (response.success) queryClient.invalidateQueries({ queryKey: ['users'] })
+    },
   })
 }
 ```
 
-### Client State: Zustand
+---
 
-Use Zustand for UI state that is not server-derived: selected rows, open modals, sidebar state.
+## Client State: `useState`/Context First, Zustand When Justified
 
 ```typescript
-// state/users/user-ui-store.ts
-import { create } from 'zustand'
+// features/users/hooks/use-user-selection.ts — Context is enough for most cases
+import { createContext, useContext, useState, type ReactNode } from 'react'
 
-interface UserUiState {
+interface UserSelectionState {
   selectedUserId: string | null
-  isDeleteDialogOpen: boolean
   selectUser: (id: string) => void
-  openDeleteDialog: () => void
-  closeDeleteDialog: () => void
+  clearSelection: () => void
 }
 
-export const useUserUiStore = create<UserUiState>((set) => ({
-  selectedUserId: null,
-  isDeleteDialogOpen: false,
-  selectUser: (id) => set({ selectedUserId: id }),
-  openDeleteDialog: () => set({ isDeleteDialogOpen: true }),
-  closeDeleteDialog: () => set({ isDeleteDialogOpen: false, selectedUserId: null }),
+const UserSelectionContext = createContext<UserSelectionState | null>(null)
+
+export function UserSelectionProvider({ children }: { children: ReactNode }) {
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
+  return (
+    <UserSelectionContext.Provider value={{
+      selectedUserId,
+      selectUser: setSelectedUserId,
+      clearSelection: () => setSelectedUserId(null),
+    }}>
+      {children}
+    </UserSelectionContext.Provider>
+  )
+}
+
+export const useUserSelection = () => {
+  const ctx = useContext(UserSelectionContext)
+  if (!ctx) throw new Error('useUserSelection must be used within UserSelectionProvider')
+  return ctx
+}
+```
+
+Reach for Zustand only once state genuinely needs to cross feature boundaries and prop-drilling/Context nesting has become the actual problem — not as a default:
+
+```typescript
+// shared/hooks/use-ui-store.ts — cross-feature UI state, once justified
+import { create } from 'zustand'
+
+interface UiState {
+  sidebarOpen: boolean
+  toggleSidebar: () => void
+}
+
+export const useUiStore = create<UiState>((set) => ({
+  sidebarOpen: true,
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 }))
 ```
 
-**Rule:** Do NOT store server data (users, orders) in Zustand. React Query is the source of truth for server state. Zustand holds only UI interaction state.
+**Rule:** Never store server data in Zustand — server data lives in a hook (`useState` or TanStack Query), Zustand holds only cross-feature UI state.
 
 ---
 
-## Smart Components (Containers)
+## Pages and Components
 
-Smart components compose hooks and pass data to presentational components. They should contain minimal JSX.
+Pages compose hooks and pass data to components. Components stay focused on rendering and user interaction.
 
 ```typescript
-// pages/users/users-page.tsx
+// features/users/pages/users-page.tsx
+import { useUserList } from '../hooks/use-user-list'
+import { useCreateUser } from '../hooks/use-create-user'
+import { UserListView } from '../components/UserListView'
+
 export function UsersPage() {
-  const { data: users = [], isLoading, error } = useUserList()
-  const { mutate: deleteUser, isPending: isDeleting } = useDeleteUser()
-  const { selectedUserId, selectUser, isDeleteDialogOpen, openDeleteDialog, closeDeleteDialog } = useUserUiStore()
-
-  function handleDeleteRequest(id: string) {
-    selectUser(id)
-    openDeleteDialog()
-  }
-
-  function handleDeleteConfirm() {
-    if (selectedUserId) deleteUser(selectedUserId)
-    closeDeleteDialog()
-  }
+  const { users, isLoading, error } = useUserList()
+  const { mutate: createUser, isPending } = useCreateUser()
 
   return (
     <UserListView
       users={users}
       isLoading={isLoading}
-      error={error?.message}
-      onDeleteRequest={handleDeleteRequest}
-      deleteDialog={
-        <ConfirmDialog
-          open={isDeleteDialogOpen}
-          isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={closeDeleteDialog}
-        />
-      }
+      error={error}
+      onCreateUser={createUser}
+      isCreating={isPending}
     />
   )
 }
 ```
 
----
-
-## Presentational Components
-
-Receive all data via props. No `useQuery`, no `useServices`, no Zustand. Local UI state (`useState`, `useRef`) is allowed.
-
 ```typescript
-// components/users/user-list-view/user-list-view.tsx
+// features/users/components/UserListView.tsx
+import type { User } from '../types/user'
+
 interface UserListViewProps {
   users: readonly User[]
   isLoading: boolean
-  error?: string
-  onDeleteRequest: (id: string) => void
-  deleteDialog?: ReactNode
+  error: string | null
+  onCreateUser: (data: { name: string; email: string }) => void
+  isCreating: boolean
 }
 
-export function UserListView({ users, isLoading, error, onDeleteRequest, deleteDialog }: UserListViewProps) {
+export function UserListView({ users, isLoading, error, onCreateUser, isCreating }: UserListViewProps) {
   if (isLoading) return <Spinner />
   if (error) return <ErrorMessage message={error} />
 
   return (
-    <>
-      <ul>
-        {users.map(user => (
-          <UserCard key={user.id} user={user} onDelete={() => onDeleteRequest(user.id)} />
-        ))}
-      </ul>
-      {deleteDialog}
-    </>
+    <ul>
+      {users.map((user) => (
+        <li key={user.id}>{user.name} — {user.email}</li>
+      ))}
+    </ul>
   )
 }
+```
+
+---
+
+## Testing
+
+Vitest + Testing Library, colocated with the file under test. See [testing.md](testing.md) for the full naming and assertion conventions — summary:
+
+```typescript
+// features/users/api/users.api.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { client } from '../../../shared/api/client'
+import { getActiveUsers } from './users.api'
+
+vi.mock('../../../shared/api/client')
+
+describe('users.api', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  describe('getActiveUsers', () => {
+    it('should return the active users when the request succeeds', async () => {
+      vi.mocked(client.get).mockResolvedValue({ success: true, data: [], pagination: { page: 1, pageSize: 25, totalCount: 0, hasMore: false } })
+
+      const result = await getActiveUsers()
+
+      expect(result.success).toBe(true)
+      expect(client.get).toHaveBeenCalledWith('/users', { params: { isActive: true } })
+    })
+  })
+})
 ```
 
 ```typescript
-// components/users/user-card/user-card.tsx
-interface UserCardProps {
-  user: User
-  onDelete: () => void
-}
+// features/users/components/UserListView.test.tsx
+import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { UserListView } from './UserListView'
 
-export function UserCard({ user, onDelete }: UserCardProps) {
-  return (
-    <li>
-      <span>{user.name}</span>
-      <span>{user.email}</span>
-      <button onClick={onDelete}>Delete</button>
-    </li>
-  )
-}
+describe('UserListView', () => {
+  it('renders a list item for each user', () => {
+    render(
+      <UserListView
+        users={[{ id: '1', name: 'Alice', email: 'alice@example.com' }]}
+        isLoading={false}
+        error={null}
+        onCreateUser={vi.fn()}
+        isCreating={false}
+      />
+    )
+
+    expect(screen.getByText('Alice — alice@example.com')).toBeInTheDocument()
+  })
+})
 ```
+
+**Rules:**
+- Mock the shared client (`shared/api/client.ts`) with `vi.mock`, not `fetch` globally and not the feature's own `api/` module — the client is the actual integration seam.
+- Query by role, label, or visible text — never `data-testid` unless there's no semantic alternative.
+- Assert what the user sees/does — never component state or internal props.
 
 ---
 
-## React Layer-First File Structure
-
-```
-src/
-  state/
-    users/
-      use-user-list.ts
-      use-user-by-id.ts
-      use-create-user.ts
-      use-delete-user.ts
-      user-ui-store.ts
-  components/
-    users/
-      user-card/
-        user-card.tsx
-        user-card.test.tsx
-        user-card.module.css
-      user-list-view/
-        user-list-view.tsx
-        user-list-view.test.tsx
-      user-form/
-        user-form.tsx
-        user-form.test.tsx
-    shared/
-      ...
-  pages/
-    users/
-      users-page.tsx
-      user-edit-page.tsx
-  core/
-    providers.tsx
-    api-client.ts
-```
-
----
-
-## React Clean Architecture Checklist
+## React (Vite SPA) Checklist
 
 Before committing React feature code:
-- [ ] No `fetch`/`axios` calls outside of `repositories/`
-- [ ] No business logic inside hooks — hooks call service methods only
-- [ ] No service injection inside presentational components
-- [ ] Smart components: minimal JSX, primarily hook composition
-- [ ] Presentational components: all data via props, no `useQuery`/`useServices`
-- [ ] `Result<T>` returned by service mutations is handled at the mutation hook level
-- [ ] Zustand stores hold UI state only — no server data cached there
-- [ ] Tests use `<ServicesProvider services={mockServices}>` — no global fetch mocking
-- [ ] Pages import from `state/` and `components/` within the same feature scope — no cross-feature component imports
-- [ ] Domain types imported from `domain/` — no inline type definitions that duplicate domain models
+- [ ] No `fetch`/`axios` calls outside `shared/api/client.ts`
+- [ ] Feature `api/` modules are plain functions, not classes — no repository/service layer invented
+- [ ] Server data fetched in a hook; `useState` unless TanStack Query is a recorded, justified choice
+- [ ] No `ServicesProvider`/composition-root pattern — there is no DI container in this architecture
+- [ ] Zustand (if used) holds only cross-feature UI state, never server data
+- [ ] Pages import from the same feature's `hooks/`/`components/` — no cross-feature component imports
+- [ ] `ApiResponse<T>.success` checked directly — never wrapped in try/catch for an expected failure
+- [ ] Tests mock `shared/api/client.ts`, not `fetch` globally

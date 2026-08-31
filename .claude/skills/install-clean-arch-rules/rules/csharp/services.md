@@ -50,24 +50,37 @@ var service = new UserService(mockRepository, fakeTime);
 // fakeTime.Advance(TimeSpan.FromHours(1)); — to simulate time passing
 ```
 
-### Example Service
+### Example Service — Result<T> per the reservation rule (ADR-IDP001)
+
+All of these outcomes — duplicate email, not-found — are "the system did its job and the answer was no," so they return `Result<T>`/`Result`, never throw. See `csharp/domain.md` for the `Result<T>`/`ResultError`/`ResultErrorKind` shape and the full reservation rule. **There is one canonical style for expected outcomes — do not mix a `Result`-returning method with a throwing one for the same kind of failure.**
 
 ```csharp
 public class UserService(
     IUserRepository userRepository,
-    TimeProvider timeProvider) : IUserService
+    TimeProvider timeProvider,
+    ILogger<UserService> logger) : IUserService
 {
-    public virtual async Task<User?> GetUserByIdAsync(int id, CancellationToken cancellationToken)
+    public virtual async Task<Result<User>> GetUserByIdAsync(int id, CancellationToken cancellationToken)
     {
-        return await userRepository.UserSingleOrDefaultByIdAsync(id, cancellationToken);
+        var user = await userRepository.UserSingleOrDefaultByIdAsync(id, cancellationToken);
+        if (user is null)
+            return Result.Failure<User>(new ResultError(
+                ResultErrorKind.NotFound, "user.not_found", $"User {id} was not found"));
+
+        return Result.Success(user);
     }
 
-    public virtual async Task<User> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken)
+    public virtual async Task<Result<User>> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken)
     {
         // Business logic: Check for duplicate email — SingleOrDefault since absence is expected
         var existingUser = await userRepository.UserSingleOrDefaultByEmailAsync(request.Email, cancellationToken);
         if (existingUser is not null)
-            throw new DuplicateEmailException($"Email {request.Email} already exists");
+        {
+            logger.LogInformation(
+                "User creation rejected: email conflict. Email={Email}", request.Email);
+            return Result.Failure<User>(new ResultError(
+                ResultErrorKind.Conflict, "user.duplicate_email", $"Email {request.Email} already exists"));
+        }
 
         var user = new User
         {
@@ -75,13 +88,24 @@ public class UserService(
             Email = request.Email,
             CreatedAtUtc = timeProvider.GetUtcNow().UtcDateTime
         };
-        return await userRepository.UserAddAsync(user, cancellationToken);
+        var created = await userRepository.UserAddAsync(user, cancellationToken);
+        return Result.Success(created);
     }
 
-    public virtual async Task<User> UpdateUserAsync(int id, UpdateUserRequest request, CancellationToken cancellationToken)
+    public virtual async Task<Result<User>> UpdateUserAsync(int id, UpdateUserRequest request, CancellationToken cancellationToken)
     {
-        // Single — throws NotFoundException if user doesn't exist
-        var user = await userRepository.UserSingleByIdAsync(id, cancellationToken);
+        // NotFoundException from Single is a repository-internal signal — caught and
+        // translated here into Result.Failure(NotFound), never left to propagate.
+        User user;
+        try
+        {
+            user = await userRepository.UserSingleByIdAsync(id, cancellationToken);
+        }
+        catch (NotFoundException)
+        {
+            return Result.Failure<User>(new ResultError(
+                ResultErrorKind.NotFound, "user.not_found", $"User {id} was not found"));
+        }
 
         var updated = user with
         {
@@ -89,33 +113,19 @@ public class UserService(
             Email = request.Email,
             UpdatedAtUtc = timeProvider.GetUtcNow().UtcDateTime
         };
-        return await userRepository.UserUpdateAsync(updated, cancellationToken);
+        var saved = await userRepository.UserUpdateAsync(updated, cancellationToken);
+        return Result.Success(saved);
     }
 
-    public virtual async Task DeleteUserAsync(int id, CancellationToken cancellationToken)
+    public virtual async Task<Result> DeleteUserAsync(int id, CancellationToken cancellationToken)
     {
         await userRepository.UserDeleteAsync(id, cancellationToken);
+        return Result.Success();
     }
 }
 ```
 
-### Result Pattern Usage in Services
-
-When using `Result<T>` (see `csharp/domain.md`), return results instead of throwing:
-
-```csharp
-public async Task<Result<User>> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken)
-{
-    var existingUser = await userRepository.UserSingleOrDefaultByEmailAsync(request.Email, cancellationToken);
-    if (existingUser is not null)
-        return Result<User>.Failure($"Email {request.Email} already exists");
-
-    var user = new User { Name = request.Name, Email = request.Email };
-    var created = await userRepository.UserAddAsync(user, cancellationToken);
-
-    return Result<User>.Success(created);
-}
-```
+Every rejection is **logged once, at this layer, at info/warn level** (per ADR-IDP001 Part 1) — the controller and any central handler must not re-log it. See `csharp/presentation.md` for how a controller translates `Result<T>` to HTTP.
 
 ## FluentValidation
 

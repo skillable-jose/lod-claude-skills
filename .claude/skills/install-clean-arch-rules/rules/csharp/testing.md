@@ -17,6 +17,8 @@ Same requirement as common/testing.md. All C# projects must maintain 80%+ code c
 - **Assertion Library**: xUnit `Assert`
 - **Test Organization**: One test class per service/class being tested
 
+> **Recorded deviation from the org's generic default.** `ai-enablement`'s generic C# guidance (`csharp-coding-standards.md` / `review-dotnet-best-practices`) names **MSTest + FluentAssertions** with no AAA comments, copying the nearby file's style. This file deliberately deviates for repos in this family: the actual, already-shipping convention (see the real `.csproj` package references and the repo's own `unit-tests.md`/`CLAUDE.md`) is **xUnit + Moq(Strict)** with explicit AAA comments and `VerifyAll()`. Per the host-repo-wins adjudication rule (see `claude-md-brownfield.md`'s convention table), an established, working test suite is a legitimate reason to keep the host's framework rather than retrofit MSTest — this is not an oversight. If you are instead standing up a **new** C# project with no existing test convention, the org's generic MSTest+FluentAssertions default is the one to reach for; only use this file's xUnit+Moq bundle when the target repo already has it.
+
 Install packages:
 ```powershell
 dotnet add package Microsoft.NET.Test.Sdk

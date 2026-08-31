@@ -6,6 +6,8 @@ This document defines the standard assembly structure for C# solutions. Each ass
 
 **Note**: Assemblies should only be created if applicable to the project's requirements.
 
+**Relationship to ADR-AA002 (Onion/CLEAN Architectural Pattern):** AA002 is the org's Onion/CLEAN decision for service-based decomposition, but it carries an explicit 2026-08-26 conformance note marking it **advisory, containing no must/shall/required language** — there is currently no ADR mandating one specific project-suffix taxonomy. AA002's vocabulary for a subdomain service is `.Api` / `.Domain` / `.Data` / `.Contracts` (+ optional `.SDK`/`.Infrastructure`), grouped under `/Services/`, `/Infrastructure/`, `/Common/`. This file's taxonomy (`Abstractions`/`Implementation`/`Repository`/`Web.Core`/`Web.Server`/`Web.Api`/etc.) is a different, older vocabulary for the same layering intent. When installed alongside `ai-enablement` tooling that expects AA002's naming, recognize the mapping rather than treating a name mismatch as a violation: `Abstractions` ≈ `.Domain`, `Repository` ≈ `.Data`, `Web.Api`/`Web.Server` ≈ `.Api`, `Client`/`Common` ≈ `.Contracts`/`.SDK`.
+
 ## Internal Folder Organization
 
 Organize files within each assembly **by type** into dedicated folders. Each type category gets its own folder at the assembly root:
@@ -213,15 +215,7 @@ The Angular SPA is a **separate sibling `.esproj` project** — see `typescript/
 
 Like Angular, a React SPA (Vite) is a **separate sibling `.esproj` project** hosted by `Web.Server` — see `typescript/react.md` for the layer implementation and `csharp/scaffolding.md` → "React SPA (Vite) .esproj" for the project file and folder scaffolding.
 
----
-
-### Next.js Frontend
-
-Unlike Angular and React (Vite), Next.js is **not** hosted inside `Web.Server` via an `.esproj`. It runs as its **own standalone Node.js application** with its own server — it is not added to the `.sln` and is not part of `dotnet build`.
-
-- Pairs with **`Web.Api`**, not `Web.Server` — Next.js calls the backend over HTTP as a decoupled client, the same way a mobile app or third-party integration would.
-- `Web.Api` must have CORS configured to allow the Next.js app's origin (dev and production) — see `csharp/hosting.md` for middleware pipeline placement.
-- See `typescript/nextjs.md` for the App Router layer implementation (Server vs. Client Components, composition root) and `csharp/scaffolding.md` → "Next.js Frontend (standalone)" for scaffolding.
+**Next.js is intentionally not offered as a module choice here.** The org's frontend-architecture decision rejected Next.js in favor of a Vite SPA baseline ("Next.js instead of Vite: rejected for v1 — most prototypes are SPAs, Vite scaffolds are simpler; revisit if SSR becomes a real need"). If a repo already runs Next.js from before that decision, treat it as a recorded legacy deviation rather than scaffolding new Next.js modules.
 
 ---
 
@@ -246,7 +240,7 @@ Unlike Angular and React (Vite), Next.js is **not** hosted inside `Web.Server` v
 - B2B APIs
 - Internal service-to-service communication
 - Public API endpoints
-- Primary backend for a decoupled frontend (e.g., a standalone Next.js app — see "Next.js Frontend" above)
+- Primary backend for a decoupled frontend consumed as a pure HTTP client (e.g., a mobile app, or a frontend hosted entirely outside this solution)
 
 **Best Practices**:
 - Configure proper API documentation (Swagger)

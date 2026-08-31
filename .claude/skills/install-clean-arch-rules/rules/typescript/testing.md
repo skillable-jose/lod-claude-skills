@@ -9,23 +9,24 @@ paths:
 ---
 # TypeScript/JavaScript Testing
 
-> This file extends [common/testing.md](../common/testing.md) with TypeScript/JavaScript-specific conventions. Read that file first for the intent rule, TDD workflow, AAA pattern, and coverage requirements.
+> This file extends [common/testing.md](../common/testing.md) with TypeScript/JavaScript-specific conventions. Read that file first for the intent rule, TDD workflow, AAA pattern, and coverage requirements. See [frontend-arch.md](frontend-arch.md) for the feature-folder architecture these examples assume.
 
 ---
 
 ## Test Framework & Tools
 
-| Concern | React (Vite SPA) | Next.js | Angular |
-|---|---|---|---|
-| Unit/integration runner | **Vitest** | **Jest** (via `next/jest`) | **Jest** (default) or Vitest |
-| Component rendering | **React Testing Library** | **React Testing Library** (Server Components: call the async function directly, no render needed) | **Angular Testing Library** / `TestBed` |
-| Mocking | `vi.fn()` / `vi.spyOn()` | `jest.fn()` / `jest.spyOn()` / `jest.mock()` | `jest.fn()` / `jest.spyOn()` |
-| E2E | **Playwright** | **Playwright** | **Playwright** |
-| Assertions | Vitest `expect` + Testing Library matchers | Jest `expect` + Testing Library matchers | Jest `expect` + Testing Library matchers |
+| Concern | React (Vite SPA) — org baseline | Angular |
+|---|---|---|
+| Unit/integration runner | **Vitest** | **Jest** (default) or Vitest |
+| Component rendering | **React Testing Library** | **Angular Testing Library** / `TestBed` |
+| Integration (network-level) | **MSW** — mock at the network layer, not the feature's `api/` module | — |
+| Mocking | `vi.fn()` / `vi.spyOn()` / `vi.mock()` | `jest.fn()` / `jest.spyOn()` |
+| E2E | **Playwright** | **Playwright** |
+| Assertions | Vitest `expect` + Testing Library matchers | Jest `expect` + Testing Library matchers |
 
-Default Next.js to **Jest** — `next/jest` gives zero-config Jest with SWC transforms and is what `create-next-app` and most existing Next.js codebases ship with. Vitest needs manual Next.js wiring and is the exception, not the default. If the target repo's `package.json` already has a `test` script, trust that over this table — e.g. a repo running `jest --maxWorkers=50%` is Jest regardless of `vitest` also sitting in `devDependencies` (a partial/abandoned migration is common; don't assume its presence means Vitest is live).
+Vitest is the org's recorded baseline for React — trust it by default. Still, **verify against the target repo's actual `package.json` `test` script before assuming**: a repo can have `vitest` sitting unused in `devDependencies` from a stalled migration while its `test` script actually runs `jest` (or vice versa). If the real script disagrees with this table, the real script wins — note the discrepancy once, then proceed with what's real.
 
-Jest's `describe`/`it`/`expect`/`jest` globals are ambient — real Jest test files typically have no test-framework import at all. Vitest requires the explicit `import { describe, it, expect, vi } from 'vitest'` shown in the examples below; drop that import and swap `vi.*` for `jest.*` when the target project is on Jest.
+Jest's `describe`/`it`/`expect`/`jest` globals are ambient — real Jest test files typically have no test-framework import at all. Vitest requires the explicit `import { describe, it, expect, vi } from 'vitest'` shown in the examples below.
 
 ---
 
@@ -35,40 +36,34 @@ TypeScript tests do not use method names — they use nested `describe`/`it` str
 
 | Intent part | Maps to |
 |---|---|
-| What is under test | Outer `describe` — class or component name |
-| Method or behaviour under test | Inner `describe` — method name or user action |
+| What is under test | Outer `describe` — module or component name |
+| Function or behaviour under test | Inner `describe` — function name or user action |
 | Outcome + condition | `it('should ... when ...')` string |
 
-### Service / Class Tests
+### Feature `api/` Module Tests
 
 ```typescript
-// user-service.test.ts
-describe('UserService', () => {
+// features/users/api/users.api.test.ts
+describe('users.api', () => {
   describe('getUserById', () => {
-    it('should return the user when the user exists', async () => { ... })
-    it('should return null when the user does not exist', async () => { ... })
-    it('should throw UnauthorizedError when the caller is not authenticated', async () => { ... })
+    it('should return the user when the request succeeds', async () => { ... })
+    it('should return a failure ApiResponse when the user does not exist', async () => { ... })
+    it('should return a failure ApiResponse when the network request fails', async () => { ... })
   })
 
   describe('createUser', () => {
     it('should return the created user when the request is valid', async () => { ... })
-    it('should return a failure result when the email is already in use', async () => { ... })
-    it('should return a failure result when the email format is invalid', async () => { ... })
-  })
-
-  describe('deleteUser', () => {
-    it('should delete the user when the user exists and is not an admin', async () => { ... })
-    it('should throw ValidationError when the user is an admin', async () => { ... })
+    it('should return a failure ApiResponse when the email is already in use', async () => { ... })
   })
 })
 ```
 
 ### React Component Tests — User Perspective
 
-React component tests express behaviour from the **user's perspective**, not the implementation's. The inner `describe` names a user action or rendered state, not a method name.
+React component tests express behaviour from the **user's perspective**, not the implementation's. The inner `describe` names a user action or rendered state, not a function name.
 
 ```typescript
-// user-card.test.tsx
+// UserCard.test.tsx
 describe('UserCard', () => {
   it('renders the user name and email', () => { ... })
   it('renders the featured badge when featured is true', () => { ... })
@@ -83,7 +78,7 @@ describe('UserCard', () => {
 
 ### Angular Component Tests
 
-Angular component tests follow the same describe/it structure. Use `TestBed` for component tests and plain class instantiation for service tests.
+Angular component tests follow the same describe/it structure. Use `TestBed` for component tests and plain class instantiation for service tests. Angular isn't governed by the React feature-folder ADR — see [angular.md](angular.md) for its own architecture.
 
 ```typescript
 // user-list-view.component.spec.ts
@@ -99,8 +94,8 @@ describe('UserListViewComponent', () => {
 ```
 
 **Rules:**
-- Outer `describe` = class or component name — always matches the file's subject exactly
-- Inner `describe` = method name (services) or user action / rendered state (components)
+- Outer `describe` = module or component name — always matches the file's subject exactly
+- Inner `describe` = function name (api/hooks) or user action / rendered state (components)
 - `it` string starts with `'should'` and reads as a complete sentence
 - Vague names are forbidden: `it('works')`, `it('handles error')`, `it('test 1')` — all forbidden
 - The full intent must be readable from `describe` + `it` without opening the test body
@@ -109,23 +104,22 @@ describe('UserListViewComponent', () => {
 
 ## File Co-location
 
-Tests live alongside the source file they test — not in a separate `__tests__` folder.
+Tests live alongside the source file they test — not in a separate `__tests__` folder (React feature folders):
 
 ```
-components/users/
-  user-card/
-    user-card.tsx
-    user-card.test.tsx            ← React component test
-    user-card.module.css
-pages/users/
-  users-page.tsx
-  users-page.test.tsx
-state/users/
-  use-user-list.ts
-  use-user-list.test.ts
-services/users/
-  user-service.ts
-  user-service.test.ts
+features/users/
+  api/
+    users.api.ts
+    users.api.test.ts
+  hooks/
+    use-user-list.ts
+    use-user-list.test.ts
+  components/
+    UserCard.tsx
+    UserCard.test.tsx
+  pages/
+    UsersPage.tsx
+    UsersPage.test.tsx
 ```
 
 Angular uses `.spec.ts` by convention:
@@ -149,19 +143,19 @@ services/users/
 Every test follows Arrange / Act / Assert with labelled comments:
 
 ```typescript
-it('should return the user when the user exists', async () => {
+it('should return the user when the request succeeds', async () => {
   // Arrange
   const userId = 'user-1'
-  const expectedUser: User = { id: userId, name: 'Alice', email: 'alice@example.com', role: 'member', isActive: true, createdAt: new Date() }
-  mockUserRepository.userSingleOrDefaultById.mockResolvedValue(expectedUser)
+  const expectedUser: User = { id: userId, name: 'Alice', email: 'alice@example.com' }
+  vi.mocked(client.get).mockResolvedValue({ success: true, data: expectedUser })
 
   // Act
-  const result = await userService.getUserById(userId)
+  const result = await getUserById(userId)
 
   // Assert
-  expect(result).toEqual(expectedUser)
-  expect(mockUserRepository.userSingleOrDefaultById).toHaveBeenCalledOnce()
-  expect(mockUserRepository.userSingleOrDefaultById).toHaveBeenCalledWith(userId)
+  expect(result).toEqual({ success: true, data: expectedUser })
+  expect(client.get).toHaveBeenCalledOnce()
+  expect(client.get).toHaveBeenCalledWith(`/users/${userId}`)
 })
 ```
 
@@ -169,48 +163,35 @@ it('should return the user when the user exists', async () => {
 
 ## Mocking
 
-### Services — Mock the Repository Interface
+### Feature `api/` Modules — Mock the Shared Client
 
-Services are plain classes. Construct them directly with a mock repository. Do not use `vi.mock` module-level patching — construct the mock object explicitly.
+This is the org's baseline shape (per [frontend-arch.md](frontend-arch.md)): a feature's `api/` module is a set of plain functions calling the one shared `shared/api/client.ts`. There is no constructor to inject a fake into, so mocking the shared client module is the correct, expected tool — not a workaround.
 
 ```typescript
-// user-service.test.ts
+// features/users/api/users.api.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { UserService } from './user-service'
-import type { IUserRepository } from '../domain/interfaces/i-user-repository'
+import { client } from '../../../shared/api/client'
+import { getUserById, createUser } from './users.api'
 
-const mockUserRepository: IUserRepository = {
-  userSingleById: vi.fn(),
-  userSingleOrDefaultById: vi.fn(),
-  userSingleOrDefaultByEmail: vi.fn(),
-  userFindAll: vi.fn(),
-  userCreate: vi.fn(),
-  userUpdate: vi.fn(),
-  userDelete: vi.fn(),
-}
+vi.mock('../../../shared/api/client')
 
-describe('UserService', () => {
-  let userService: UserService
-
-  beforeEach(() => {
-    vi.clearAllMocks()
-    userService = new UserService(mockUserRepository)
-  })
+describe('users.api', () => {
+  beforeEach(() => vi.clearAllMocks())
 
   describe('getUserById', () => {
-    it('should return the user when the user exists', async () => {
+    it('should return the user when the request succeeds', async () => {
       // Arrange
       const userId = 'user-1'
-      const expected: User = { id: userId, name: 'Alice', email: 'alice@example.com', role: 'member', isActive: true, createdAt: new Date() }
-      vi.mocked(mockUserRepository.userSingleOrDefaultById).mockResolvedValue(expected)
+      const expected: User = { id: userId, name: 'Alice', email: 'alice@example.com' }
+      vi.mocked(client.get).mockResolvedValue({ success: true, data: expected })
 
       // Act
-      const result = await userService.getUserById(userId)
+      const result = await getUserById(userId)
 
       // Assert
-      expect(result).toEqual(expected)
-      expect(mockUserRepository.userSingleOrDefaultById).toHaveBeenCalledOnce()
-      expect(mockUserRepository.userSingleOrDefaultById).toHaveBeenCalledWith(userId)
+      expect(result).toEqual({ success: true, data: expected })
+      expect(client.get).toHaveBeenCalledOnce()
+      expect(client.get).toHaveBeenCalledWith(`/users/${userId}`)
     })
   })
 })
@@ -220,52 +201,21 @@ describe('UserService', () => {
 - `vi.clearAllMocks()` / `jest.clearAllMocks()` in `beforeEach` — never share mock state between tests
 - Always assert **both** the return value AND the mock call (count + arguments)
 - Use `vi.mocked()` / `jest.mocked()` for type-safe mock access
-- Avoid `vi.mock(modulePath)` / `jest.mock(modulePath)` for application **services** (classes with constructor-injected dependencies) — prefer explicit constructor injection with a mock object, as above
+- Mock `shared/api/client.ts`, not `global.fetch` — the client is the actual integration seam per `frontend-arch.md` Rule 2
 
-**Exception — plain exported functions with no constructor to inject into:** many real codebases (especially Next.js apps that predate or skip the `frontend-arch.md` layering) expose API calls as plain functions calling `fetch` directly, not as methods on a DI'd repository class. There's nothing to construct-inject there, so module-level mocking is the correct and expected tool:
-
-```typescript
-// advisor.test.ts — module under test exports plain functions, not a class
-jest.mock('../utils/api/authToken');
-
-describe('advisor', () => {
-  beforeAll(() => {
-    (getAuthToken as jest.Mock).mockResolvedValue({ accessToken: TEST_ACCESS_TOKEN });
-  });
-
-  describe('getRecommendationSummary', () => {
-    it('calls API with correct URL and options', async () => {
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ numLabs: 0 }) });
-
-      const result = await getRecommendationSummary(AdvisorRecommendationStatus.NEW);
-
-      expect(result.responseData).toStrictEqual({ numLabs: 0 });
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/recommendationsummary'), expect.any(Object));
-    });
-  });
-});
-```
-
-Reach for constructor injection (no module mocking) whenever you're the one designing the module; reach for `jest.mock()`/module patching only when working inside an existing function-exports module that has no class to inject into.
+**If a project deliberately uses a class with constructor-injected dependencies** (not the org baseline, but a legitimate choice some projects make): construct the mock dependency object explicitly and inject it instead of module-mocking the class.
 
 ### React Components — Testing Library
 
 Test what the user sees and does, not implementation details. Do not assert on component state or internal methods.
 
 ```typescript
-// user-card.test.tsx
+// UserCard.test.tsx
 import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
-import { UserCard } from './user-card'
+import { UserCard } from './UserCard'
 
-const fakeUser: User = {
-  id: 'user-1',
-  name: 'Alice',
-  email: 'alice@example.com',
-  role: 'member',
-  isActive: true,
-  createdAt: new Date(),
-}
+const fakeUser: User = { id: 'user-1', name: 'Alice', email: 'alice@example.com' }
 
 describe('UserCard', () => {
   it('renders the user name and email', () => {
@@ -298,7 +248,7 @@ describe('UserCard', () => {
 - Query by role, label, or visible text — never by `data-testid` unless no semantic alternative exists
 - `data-testid` is a last resort, not a default
 - Do not assert on CSS classes, component state, or internal props
-- Wrap `ServicesProvider` with mock services for container/page components (see [react.md](react.md))
+- Wrap with whatever the project's real provider setup is (`AuthProvider`, `ThemeProvider` from `app/providers/`) — never invent a `ServicesProvider`; there is no composition root/DI container in this architecture
 
 ### Angular Components — TestBed
 
@@ -310,7 +260,7 @@ import { render } from '@testing-library/angular'
 import { UserListViewComponent } from './user-list-view.component'
 
 const fakeUsers: User[] = [
-  { id: 'user-1', name: 'Alice', email: 'alice@example.com', role: 'member', isActive: true, createdAt: new Date() },
+  { id: 'user-1', name: 'Alice', email: 'alice@example.com' },
 ]
 
 describe('UserListViewComponent', () => {
@@ -336,35 +286,71 @@ describe('UserListViewComponent', () => {
 
 ---
 
-## Exception / Error Testing
+## Integration Testing with MSW
+
+For a hook or page that exercises multiple `api/` calls together, mock at the network layer with MSW instead of mocking `shared/api/client.ts` directly — this exercises the real client code (auth headers, error translation) against a fake server:
 
 ```typescript
-it('should throw ValidationError when the user is an admin', async () => {
-  // Arrange
-  const adminUser: User = { ...fakeUser, role: 'admin' }
-  vi.mocked(mockUserRepository.userSingleById).mockResolvedValue(adminUser)
+// features/users/hooks/use-user-list.integration.test.ts
+import { setupServer } from 'msw/node'
+import { http, HttpResponse } from 'msw'
+import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
+import { renderHook, waitFor } from '@testing-library/react'
+import { useUserList } from './use-user-list'
 
-  // Act + Assert
-  await expect(userService.deleteUser(adminUser.id))
-    .rejects.toThrow(ValidationError)
+const server = setupServer(
+  http.get('/api/users', () => HttpResponse.json({ success: true, data: [{ id: '1', name: 'Alice' }] }))
+)
+
+beforeAll(() => server.listen())
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+describe('useUserList', () => {
+  it('should populate users when the API call succeeds', async () => {
+    const { result } = renderHook(() => useUserList())
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.users).toEqual([{ id: '1', name: 'Alice' }])
+  })
 })
 ```
 
-For `Result<T>` failures (non-throwing):
+---
+
+## `ApiResponse<T>` / Error Testing
+
+The frontend's failure contract is `ApiResponse<T>` (see [frontend-arch.md](frontend-arch.md)), not the backend's `Result<T>`, and it's a return value, not a thrown exception — never wrap it in `.rejects.toThrow()`:
 
 ```typescript
-it('should return a failure result when the email is already in use', async () => {
+it('should return a failure ApiResponse when the email is already in use', async () => {
   // Arrange
-  vi.mocked(mockUserRepository.userSingleOrDefaultByEmail).mockResolvedValue(fakeUser)
+  vi.mocked(client.post).mockResolvedValue({
+    success: false,
+    error: { code: 'user.duplicate_email', message: 'Email already exists' },
+  })
 
   // Act
-  const result = await userService.createUser({ email: fakeUser.email, name: 'Bob', role: 'member' })
+  const result = await createUser({ email: 'alice@example.com', name: 'Alice' })
 
   // Assert
   expect(result.success).toBe(false)
   if (!result.success) {
-    expect(result.error).toContain('already in use')
+    expect(result.error.code).toBe('user.duplicate_email')
   }
+})
+```
+
+For a genuinely thrown error (e.g. a hook that re-throws on an unexpected failure):
+
+```typescript
+it('should throw when the user is not authenticated', async () => {
+  // Arrange
+  vi.mocked(client.get).mockRejectedValue(new UnauthorizedError())
+
+  // Act + Assert
+  await expect(getUserById('user-1')).rejects.toThrow(UnauthorizedError)
 })
 ```
 
@@ -372,7 +358,7 @@ it('should return a failure result when the email is already in use', async () =
 
 ## E2E Testing
 
-Use **Playwright** for critical user flows. See the `e2e-runner` agent for implementation patterns.
+Use **Playwright** for critical user flows.
 
 ```typescript
 // e2e/users.spec.ts
@@ -399,17 +385,17 @@ test.describe('Users page', () => {
 
 Before committing tests:
 
-- [ ] Outer `describe` matches the class or component name exactly
-- [ ] Inner `describe` names the method (services) or user action/state (components)
+- [ ] Outer `describe` matches the module or component name exactly
+- [ ] Inner `describe` names the function (api/hooks) or user action/state (components)
 - [ ] Every `it` string starts with `'should'` and reads as a complete sentence
 - [ ] No vague names: `it('works')`, `it('handles error')`, `it('test 1')` are forbidden
 - [ ] `vi.clearAllMocks()` / `jest.clearAllMocks()` called in `beforeEach`
-- [ ] Services (classes with constructor-injected dependencies): mock constructed explicitly via interface — no `vi.mock`/`jest.mock` module patching. Plain exported functions with no constructor to inject into are the documented exception — module mocking is expected there.
+- [ ] Feature `api/` module tests mock `shared/api/client.ts` — not `global.fetch`, not the module under test itself
 - [ ] Components: queried by role/label/text — no `data-testid` unless unavoidable
-- [ ] Every test asserts both return value AND mock call (count + arguments) for service tests
+- [ ] Every test asserts both return value AND mock call (count + arguments) for `api/` module tests
 - [ ] AAA pattern with labelled comments
-- [ ] Exception tests use `.rejects.toThrow()` — not try/catch
-- [ ] `Result<T>` failures asserted on `result.success === false` and `result.error` content
-- [ ] If the repo uses the `frontend-arch.md` layered composition root: page/container tests wrap with `<ServicesProvider services={mockServices}>`. Otherwise, use the repo's actual render helper / provider wrapper (e.g. a project-specific `renderHelper` composing its real context providers) — don't invent a `ServicesProvider` that doesn't exist in the codebase.
+- [ ] `ApiResponse<T>` failures asserted on `result.success === false` and `result.error.code` — never wrapped in `.rejects`
+- [ ] Genuinely thrown errors use `.rejects.toThrow()`
+- [ ] No invented `ServicesProvider`/composition-root wrapper in component tests — use the project's real providers
 - [ ] 80%+ coverage maintained (or the repo's own configured `coverageThreshold`, if different)
 - [ ] TDD workflow followed — test written before implementation

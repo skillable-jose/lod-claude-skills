@@ -11,14 +11,19 @@ paths:
 
 ## API Response Format
 
+> Normative per the org's frontend-architecture decision (see [frontend-arch.md](frontend-arch.md)) — a discriminated union, not a single shape with optional fields. Prefer `import type { ApiResponse } from '@skillr/api-types'` (or the project's equivalent shared package) over redeclaring this locally.
+
 ```typescript
-interface ApiResponse<T> {
-  success: boolean
-  data?: T
-  error?: string
-  statusCode: number  // REQUIRED — HTTP status code (e.g., 200, 404, 500)
-}
+type ApiResponse<T> =
+  | { success: true; data: T }
+  | { success: false; error: { code: string; message: string; details?: unknown } }
+
+type PaginatedApiResponse<T> =
+  | { success: true; data: T[]; pagination: { page: number; pageSize: number; totalCount: number; hasMore: boolean } }
+  | { success: false; error: { code: string; message: string; details?: unknown } }
 ```
+
+Narrow on `response.success` — TypeScript then knows `data` exists in the `true` branch and `error` exists in the `false` branch. Don't add a `statusCode` field to this type: HTTP status is a transport-layer detail the shared `shared/api/client.ts` already consumed to decide `success`; a caller matches on `error.code`, never on a status number or on `error.message` text.
 
 ## Custom Hooks Pattern
 
@@ -35,7 +40,9 @@ export function useDebounce<T>(value: T, delay: number): T {
 }
 ```
 
-## Repository Pattern
+## Repository Pattern (non-baseline — see note)
+
+> **The org's actual React baseline is plain functions in a feature's `api/` module** (see [frontend-arch.md](frontend-arch.md) and [react.md](react.md)), not a class-based repository with a DI'd interface. The pattern below is a legitimate alternative for a project that deliberately chooses class-based DI (e.g. a larger Node backend-for-frontend, or a team porting backend-style layering on purpose) — it is not what to reach for by default in a React feature folder. Record the choice in that project's `ADR-0000` if you do use it.
 
 **Naming Convention** (Repositories only — does NOT apply to Services): Methods MUST start with entity type for grouping (e.g., `userSingleById`, `userCreate`). Service interfaces use natural application-level naming (e.g., `getUserById`, `createUser`).
 

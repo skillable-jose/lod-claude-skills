@@ -174,7 +174,7 @@ Match the `<TargetFramework>` of existing projects in the repo if any exist.
 </Project>
 ```
 
-Omit the `.esproj` reference if neither an Angular nor a React module was requested (a project has at most one of the two — Angular and React are alternative choices for the same `.client` slot). Never add this reference for a Next.js module — Next.js is not an `.esproj`; see "Next.js Frontend (standalone)" below.
+Omit the `.esproj` reference if neither an Angular nor a React module was requested (a project has at most one of the two — Angular and React are alternative choices for the same `.client` slot).
 
 **Web.Api** — ASP.NET Core web application:
 ```xml
@@ -268,53 +268,21 @@ Project name is lowercase: `[projectnamespace].client`. Place it under `src/`. O
 </Project>
 ```
 
-Additional files to create (see `typescript/react.md` for the layer implementation):
+Additional files to create (see `typescript/react.md` for the layer implementation — feature-folder architecture per the org's frontend-architecture ADR):
 
 | File | Notes |
 |---|---|
 | `vite.config.ts` | Set `build.outDir` to `../[ProjectNamespace].Web.Server/wwwroot` |
-| `package.json` | React + Vite dependencies (`react`, `react-dom`, `@tanstack/react-query`, `zustand`, `vite`) |
+| `package.json` | React + Vite dependencies (`react`, `react-dom`, `vite`; add `@tanstack/query` or `zustand` only if a feature's server/client state complexity actually justifies it — not by default) |
 | `tsconfig.json` | TypeScript config |
+| `tailwind.config.ts` | Design tokens wired via `theme.extend`, generated from the project's `DESIGN.md` |
 | `.env` / `.env.development` | `VITE_API_BASE_URL` — dev proxy target |
 | `vite.config.ts` server.proxy | Route `/api` to `https://localhost:<port>` |
-| `src/domain/` | Types, interfaces, domain errors |
-| `src/repositories/` | HTTP implementations |
-| `src/services/` | Business logic services |
-| `src/state/` | React Query hooks + Zustand stores |
-| `src/components/` | Presentational components + `shared/` + `layout/` |
-| `src/pages/` | Smart page components |
-| `src/core/` | `providers.tsx` composition root, `api-client.ts` |
-| `src/main.tsx` | Bootstrap entry point (renders `<ServicesProvider>`) |
-
----
-
-## Next.js Frontend (standalone)
-
-Next.js is **not** an `.esproj` and is **not** added to the `.sln`. It is a sibling Node.js application scaffolded and run independently, wired to call `[ProjectNamespace].Web.Api` over HTTP — see `csharp/modularization.md` → "Next.js Frontend" for the architectural rationale and `typescript/nextjs.md` for the layer implementation.
-
-**Scaffold command** (run from the repo root, outside `src/` and outside the `.sln`):
-
-```bash
-npx create-next-app@latest [projectnamespace].client --typescript --app --src-dir --eslint
-```
-
-Additional setup:
-
-| File | Notes |
-|---|---|
-| `.env.local` | `API_BASE_URL` (server-side, internal) and `NEXT_PUBLIC_API_BASE_URL` (client-side, public) pointing at `Web.Api`'s dev URL |
-| `src/domain/` | Types, interfaces, domain errors |
-| `src/repositories/` | HTTP implementations |
-| `src/services/` | Business logic services |
-| `src/state/` | React Query hooks + Zustand stores (Client Components only) |
-| `src/components/` | `'use client'` presentational components needing interactivity |
-| `src/core/services.server.ts` | Server Component / Route Handler composition root |
-| `src/core/providers.tsx` | Client Component composition root |
-| `src/app/` | App Router routes, layouts, and optional Route Handlers |
-
-**Backend wiring**: `Web.Api`'s `Program.cs` must add a CORS policy allowing the Next.js app's origin — see `csharp/hosting.md` for where CORS fits in the middleware pipeline order.
-
-**Build verification**: `dotnet build` does not cover this module. Verify with `npm run build` inside `[projectnamespace].client/`.
+| `src/app/` | `main.tsx`, `App.tsx`, `router.tsx`, `providers/` (`AuthProvider.tsx`, `ThemeProvider.tsx`) |
+| `src/features/<feature-name>/` | `api/`, `components/`, `hooks/`, `types/`, `pages/`, `index.ts` — one folder per feature, see `typescript/frontend-arch.md` |
+| `src/shared/` | `api/` (`client.ts`, `api-response.types.ts`, `error-handling.ts`), `auth/`, `components/`, `hooks/`, `feature-flags/` |
+| `src/styles/` | `variables.css` (design tokens), `globals.css` |
+| `DESIGN.md` | Design-token source of truth at the project root |
 
 ---
 
