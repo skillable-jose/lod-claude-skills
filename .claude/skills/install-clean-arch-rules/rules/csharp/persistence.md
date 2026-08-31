@@ -48,6 +48,10 @@ public abstract class RepositoryBase<TContext>(
 }
 ```
 
+### Integration Failures (ADR-IDP001 Part 1.2)
+
+The repository is the layer that **owns** the database integration, so it is where a genuine integration failure (connection refused, timeout not resolved by `EnableRetryOnFailure`) must be caught, logged once at warn/error with full context, and re-raised as a typed system exception (e.g. `IntegrationException`, see `csharp/domain.md`). This is different from `NotFoundException` above — "not found" is an expected outcome the calling service translates to `Result.Failure`; a DB-unreachable failure is a system error that propagates to the last-resort handler. Do not let a raw `DbUpdateException`/`SqlException` escape the repository unhandled.
+
 ### Repository Implementation
 
 Read methods use `AsNoTracking()` and return new domain model instances. Write methods accept domain models, map to EF Core entities, persist via change tracking internally, and return new domain model instances reflecting the saved state.

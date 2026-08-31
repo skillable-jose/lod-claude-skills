@@ -11,6 +11,8 @@ paths:
 
 > Framework-agnostic CSS architecture rules for maintainable SPA styling. Covers design tokens, ITCSS layer structure, naming conventions, component scoping, theming, and anti-patterns. See [react.md](react.md) and [angular.md](angular.md) for framework-specific integration.
 
+**Token source of truth, for React projects following [frontend-arch.md](frontend-arch.md):** token *values* are not authored by hand-editing `_tokens.scss` from scratch. They come from the project's `DESIGN.md` (per the org's frontend-architecture decision — either pulled from the org's design-system source, or authored per project) compiled into `variables.css`, which both Tailwind's `theme.extend` and the chosen component library's theme override (Ant `ConfigProvider` or MUI `ThemeProvider`) consume. The ITCSS/BEM/tokens architecture below is the *mechanism* — the abstracts layer, layering, and naming rules apply — but treat `DESIGN.md` → `variables.css` as the upstream generator for Tier 1/Tier 2 token values on a React project, not a competing hand-authored set. Tailwind CSS is the mandated utility-class layer for React projects per the same ADR; this file's own `utilities/` ITCSS layer and Tailwind are complementary, not either/or — prefer Tailwind utility classes for one-off spacing/layout in JSX, and reserve this file's `utilities/` layer for the global stylesheets Angular and non-Tailwind contexts use.
+
 ---
 
 ## The Problem
@@ -134,6 +136,8 @@ styles/
 ## Layer 2: Design Tokens — CSS Custom Properties
 
 Design tokens are the single source of truth for all visual values. Every color, spacing step, radius, shadow, and font size must be a token — never a hardcoded value.
+
+> **Token architecture vs. token values.** This section defines the *architecture* — a two-tier primitive/semantic split, generated as CSS custom properties. It does not own the *values*. Per the org's frontend-architecture decision, token values are generated from the project's own `DESIGN.md`, sourced from the `skillable-design-system` repo and applied by the `apply-design-tokens` skill (if `ai-enablement` is installed) — that skill writes the actual `:root`/`[data-theme]` block into `variables.css`. Treat the primitive/semantic values below as an illustrative example, not the values to actually ship; if `apply-design-tokens` is available, let it own `variables.css` rather than hand-authoring the values yourself. The org's baseline utility layer is **Tailwind CSS** (`tailwind.config.ts`'s `theme.extend` reads the same generated CSS variables) — the ITCSS/SCSS structure below remains valid for projects using CSS Modules/SCSS instead of or alongside Tailwind; the two are complementary (both consume the same underlying CSS variables), not competing choices.
 
 ### Two-Tier Token Architecture
 
